@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lg-tv-automation"
+version = "0.1.0"
+description = "Fedora KDE + NVIDIA + LG webOS playback automation for mpv."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "bscpylgtv",
+  "Pillow",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+lg-tv-play = "lg_tv_automation.cli.play:main"
+lg-tv-ui-probe = "lg_tv_automation.cli.ui_probe:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
