@@ -6,6 +6,11 @@ import argparse
 import asyncio
 import json
 import subprocess
+import time
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from ..console import log
 from ..constants import (
@@ -22,9 +27,87 @@ from ..constants import (
     DEFAULT_TV_IP,
 )
 from ..display import DisplayController, load_display_output
-from ..media import choose_hdr_mode, normalize_mpv_args
+from ..media import choose_display_refresh_rate, choose_hdr_mode, normalize_mpv_args
 from ..profiles import build_desktop_profile, build_movie_profile
 from ..tv import TvController
+
+
+def snapshot_display_state(output_name: str) -> dict[str, Any]:
+    """Capture the small display-state subset that matters for playback debugging."""
+
+    output = load_display_output(output_name)
+    return {
+        "name": output["name"],
+        "currentModeId": output["currentModeId"],
+        "hdr": output["hdr"],
+        "wcg": output["wcg"],
+        "vrrPolicy": output.get("vrrPolicy"),
+    }
+
+
+async def snapshot_runtime_state(args: argparse.Namespace, tv: TvController | None) -> dict[str, Any]:
+    """Collect a non-invasive runtime snapshot for debug logging."""
+
+    payload: dict[str, Any] = {}
+    if not args.no_display:
+        try:
+            payload["display"] = snapshot_display_state(args.display_output)
+        except Exception as err:
+            payload["display_error"] = str(err)
+    if tv is not None:
+        try:
+            payload["tv"] = await tv.capture(include_ui_state=False)
+        except Exception as err:
+            payload["tv_error"] = str(err)
+    return payload
+
+
+def append_debug_event(debug_log_path: Path | None, event: str, payload: dict[str, Any]) -> None:
+    """Append one timestamped JSONL event to the optional debug log."""
+
+    if debug_log_path is None:
+        return
+
+    debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "event": event,
+        "payload": payload,
+    }
+    with debug_log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+async def run_mpv_with_debug(
+    mpv_args: list[str],
+    *,
+    debug_log_path: Path | None,
+    debug_cue_seconds: float,
+    args: argparse.Namespace,
+    tv: TvController | None,
+) -> int:
+    """Run mpv and optionally capture one in-playback debug snapshot."""
+
+    log(f"Launching mpv: {' '.join(mpv_args)}")
+    proc = subprocess.Popen(["mpv", *mpv_args])
+    started_at = time.monotonic()
+    cue_emitted = False
+
+    while True:
+        returncode = proc.poll()
+        if returncode is not None:
+            return returncode
+
+        if debug_log_path is not None and not cue_emitted and time.monotonic() - started_at >= debug_cue_seconds:
+            append_debug_event(
+                debug_log_path,
+                "in_playback",
+                await snapshot_runtime_state(args, tv),
+            )
+            log("DEBUG CUE: Take the TV picture now.")
+            cue_emitted = True
+
+        await asyncio.sleep(0.25)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-tv-ui",
         action="store_true",
-        help="Skip the slower screenshot-driven fallback for HDMI and Game Optimizer state.",
+        help="Skip screenshot-driven TV UI reads used for status output and exact-state capture.",
     )
     parser.add_argument("--no-display", action="store_true", help="Skip Fedora display changes.")
     parser.add_argument(
@@ -67,6 +150,16 @@ def parse_args() -> argparse.Namespace:
         "--restore-saved-state",
         action="store_true",
         help="After playback, restore the exact pre-playback state instead of the configured desktop preset.",
+    )
+    parser.add_argument(
+        "--debug-log",
+        help="Write timestamped JSONL playback snapshots to this file.",
+    )
+    parser.add_argument(
+        "--debug-cue-seconds",
+        type=float,
+        default=8.0,
+        help="Seconds after mpv launch to emit the debug picture cue. Default: 8.0",
     )
 
     parser.add_argument("--tv-ip", default=DEFAULT_TV_IP, help=f"TV IP address. Default: {DEFAULT_TV_IP}")
@@ -164,8 +257,6 @@ async def apply_desktop_preset(
     args: argparse.Namespace,
     display: DisplayController | None,
     tv: TvController | None,
-    *,
-    allow_tv_ui_fallback: bool,
 ) -> None:
     """Apply the configured desktop preset to whichever sides are enabled."""
 
@@ -178,9 +269,34 @@ async def apply_desktop_preset(
                 desktop_icon=args.desktop_icon,
                 desktop_picture_mode=args.desktop_picture_mode,
             ),
-            allow_ui_fallback=allow_tv_ui_fallback,
             dry_run=args.dry_run,
         )
+
+
+async def run_cleanup_step(operation: Callable[[], Awaitable[None]], description: str) -> bool:
+    """Finish cleanup work even if the surrounding task was cancelled.
+
+    Python 3.14 surfaces ``asyncio.CancelledError`` as a ``BaseException``.
+    During ``asyncio.run()`` shutdown that means the task can enter ``finally``
+    with pending cancellation and every awaited cleanup step will abort
+    immediately unless the cancellation is deferred first.
+    """
+
+    task = asyncio.current_task()
+    saw_cancellation = False
+
+    while True:
+        if task is not None:
+            while task.cancelling():
+                task.uncancel()
+                saw_cancellation = True
+
+        try:
+            await operation()
+            return saw_cancellation
+        except asyncio.CancelledError:
+            saw_cancellation = True
+            log(f"{description} interrupted by cancellation, retrying cleanup.")
 
 
 async def async_main() -> int:
@@ -188,6 +304,20 @@ async def async_main() -> int:
 
     args = parse_args()
     mpv_args = normalize_mpv_args(args.mpv_args)
+    debug_log_path = Path(args.debug_log).expanduser() if args.debug_log else None
+
+    if debug_log_path is not None:
+        log(f"Debug log: {debug_log_path}")
+        append_debug_event(
+            debug_log_path,
+            "start",
+            {
+                "argv": mpv_args,
+                "tv_ip": args.tv_ip,
+                "tv_input": args.tv_input,
+                "display_output": args.display_output,
+            },
+        )
 
     if args.status:
         return await print_status(args)
@@ -200,10 +330,12 @@ async def async_main() -> int:
     tv: TvController | None = None
     mpv_returncode = 0
     should_cleanup_after_run = not apply_only_mode
-    allow_tv_ui_fallback = not args.no_tv_ui and not args.no_tv
+    include_tv_ui_state = not args.no_tv_ui and not args.no_tv
     restore_saved_state = args.restore_saved_state
+    cleanup_interrupted = False
 
     want_hdr = False
+    target_refresh: float | None = None
     if args.desktop_mode:
         log(
             "Applying desktop preset: non-HDR display, "
@@ -216,12 +348,18 @@ async def async_main() -> int:
             mpv_args=mpv_args,
         )
         log(f"HDR decision: {'HDR' if want_hdr else 'SDR'} ({hdr_reason})")
+        if not args.force_60hz:
+            target_refresh, refresh_reason = choose_display_refresh_rate(mpv_args)
+            if target_refresh is not None:
+                log(f"Refresh decision: {target_refresh:.3f} Hz ({refresh_reason})")
+            else:
+                log(f"Refresh decision: unchanged ({refresh_reason})")
 
     try:
         if not args.no_display:
             try:
                 display = DisplayController(args.display_output)
-                if args.force_60hz or restore_saved_state:
+                if not args.desktop_mode:
                     display.capture()
                 if args.desktop_mode:
                     display.apply_desktop_state(dry_run=args.dry_run)
@@ -229,6 +367,7 @@ async def async_main() -> int:
                     display.apply_movie_state(
                         enable_hdr=want_hdr,
                         force_60hz=args.force_60hz,
+                        target_refresh=target_refresh,
                         dry_run=args.dry_run,
                     )
             except Exception as err:
@@ -240,20 +379,13 @@ async def async_main() -> int:
                 tv = TvController(args.tv_ip, args.tv_input)
                 await tv.__aenter__()
                 if restore_saved_state:
-                    captured_state = await tv.capture(include_ui_state=allow_tv_ui_fallback and not args.dry_run)
-                    allow_tv_ui_fallback = allow_tv_ui_fallback and not args.dry_run and {
-                        "passthrough_444",
-                        "game_optimizer_master",
-                        "vrr",
-                        "allm",
-                    }.issubset(captured_state)
+                    await tv.capture(include_ui_state=include_tv_ui_state and not args.dry_run)
 
                 if args.desktop_mode:
                     await apply_desktop_preset(
                         args,
                         None,
                         tv,
-                        allow_tv_ui_fallback=allow_tv_ui_fallback,
                     )
                 else:
                     await tv.apply_profile(
@@ -265,7 +397,6 @@ async def async_main() -> int:
                             hdr_picture_mode=args.hdr_picture_mode,
                             tru_motion=args.tru_motion,
                         ),
-                        allow_ui_fallback=allow_tv_ui_fallback,
                         dry_run=args.dry_run,
                     )
             except Exception as err:
@@ -277,6 +408,12 @@ async def async_main() -> int:
                         pass
                 tv = None
 
+        append_debug_event(
+            debug_log_path,
+            "after_apply",
+            await snapshot_runtime_state(args, tv),
+        )
+
         if args.movie_mode or args.desktop_mode:
             return 0
 
@@ -284,26 +421,39 @@ async def async_main() -> int:
             log(f"Would run: mpv {' '.join(mpv_args)}")
             return 0
 
-        log(f"Launching mpv: {' '.join(mpv_args)}")
-        proc = subprocess.run(["mpv", *mpv_args], text=True)
-        mpv_returncode = proc.returncode
+        mpv_returncode = await run_mpv_with_debug(
+            mpv_args,
+            debug_log_path=debug_log_path,
+            debug_cue_seconds=args.debug_cue_seconds,
+            args=args,
+            tv=tv,
+        )
     finally:
         if tv is not None:
             try:
                 if should_cleanup_after_run:
                     if restore_saved_state:
-                        await tv.restore(dry_run=args.dry_run, allow_ui_fallback=allow_tv_ui_fallback)
+                        cleanup_interrupted = await run_cleanup_step(
+                            lambda: tv.restore(dry_run=args.dry_run),
+                            "TV restore",
+                        ) or cleanup_interrupted
                     else:
-                        await apply_desktop_preset(
-                            args,
-                            None,
-                            tv,
-                            allow_tv_ui_fallback=allow_tv_ui_fallback,
-                        )
+                        cleanup_interrupted = await run_cleanup_step(
+                            lambda: apply_desktop_preset(args, None, tv),
+                            "TV desktop-preset restore",
+                        ) or cleanup_interrupted
             except Exception as err:
                 log(f"TV restore failed: {err}")
+            append_debug_event(
+                debug_log_path,
+                "after_tv_restore",
+                await snapshot_runtime_state(args, tv),
+            )
             try:
-                await tv.__aexit__(None, None, None)
+                cleanup_interrupted = await run_cleanup_step(
+                    lambda: tv.__aexit__(None, None, None),
+                    "TV disconnect",
+                ) or cleanup_interrupted
             except Exception as err:
                 log(f"TV disconnect failed: {err}")
 
@@ -317,8 +467,19 @@ async def async_main() -> int:
             except Exception as err:
                 log(f"Display restore failed: {err}")
 
+        append_debug_event(
+            debug_log_path,
+            "post_restore",
+            await snapshot_runtime_state(args, None),
+        )
+
+    if cleanup_interrupted:
+        return 130
     return mpv_returncode
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(async_main()))
+    try:
+        raise SystemExit(asyncio.run(async_main()))
+    except KeyboardInterrupt:
+        raise SystemExit(130)

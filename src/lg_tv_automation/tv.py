@@ -4,7 +4,7 @@ This module is the core of the project. It owns three important ideas:
 
 1. The direct, reliable API paths such as picture mode changes and input relabels.
 2. The hidden settings-write trick used for HDMI/Game Optimizer flags.
-3. The fallback UI automation path when direct hidden writes fail.
+3. The screenshot-driven UI reads used for status output and exact-state capture.
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ from .tv_ui import LgTvUiAutomation
 
 Fetcher = Callable[[], Awaitable[Any]]
 Predicate = Callable[[Any], bool]
+TV_CONNECT_TIMEOUT = 8.0
+TV_REQUEST_TIMEOUT = 5.0
+TV_HIDDEN_SETTINGS_TIMEOUT = 3.0
 
 
 class TvController:
@@ -39,11 +42,16 @@ class TvController:
 
     async def __aenter__(self) -> "TvController":
         self.client = await WebOsClient.create(self.ip)
-        await self.client.connect()
+        try:
+            await asyncio.wait_for(self.client.connect(), timeout=TV_CONNECT_TIMEOUT)
+        except TimeoutError as err:
+            raise RuntimeError(
+                "TV connection timed out. Check for a pairing prompt on the TV."
+            ) from err
         self.ui = LgTvUiAutomation(self.client, self.input_app_id)
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, _exc_type, _exc, _tb) -> None:
         """Disconnect cleanly and always land back on HDMI 1.
 
         The user can only observe and assist the session while the TV is on the
@@ -54,24 +62,50 @@ class TvController:
         if self.client is None:
             return
         try:
-            current_app = await self.client.get_current_app()
+            current_app = await self._request_with_timeout(self.client.get_current_app(), "get current app")
             if current_app != self.input_app_id:
-                await self.client.launch_app(self.input_app_id)
+                await self._request_with_timeout(
+                    self.client.launch_app(self.input_app_id),
+                    f"launch {self.input_app_id}",
+                )
                 await asyncio.sleep(1.5)
         except Exception as err:
             log(f"TV input restore on disconnect failed: {err}")
-        await self.client.disconnect()
+        try:
+            await self._request_with_timeout(self.client.disconnect(), "disconnect TV session")
+        except Exception as err:
+            log(f"TV disconnect request failed: {err}")
+
+    async def _request_with_timeout(
+        self,
+        awaitable: Awaitable[Any],
+        description: str,
+        *,
+        timeout: float = TV_REQUEST_TIMEOUT,
+    ) -> Any:
+        """Bound TV round trips so the CLI cannot hang forever on a missing reply."""
+
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout)
+        except TimeoutError as err:
+            raise RuntimeError(f"Timed out waiting for TV response while trying to {description}.") from err
 
     async def _get_input_info(self) -> dict[str, Any]:
         assert self.client is not None
-        inputs = await self.client.request("com.webos.service.eim/getAllInputStatus", {})
+        inputs = await self._request_with_timeout(
+            self.client.request("com.webos.service.eim/getAllInputStatus", {}),
+            "query HDMI input status",
+        )
         return next(device for device in inputs["devices"] if device["id"] == self.input_id)
 
     async def _get_picture_setting(self, key: str) -> Any:
         assert self.client is not None
-        result = await self.client.request(
-            "settings/getSystemSettings",
-            {"category": "picture", "keys": [key]},
+        result = await self._request_with_timeout(
+            self.client.request(
+                "settings/getSystemSettings",
+                {"category": "picture", "keys": [key]},
+            ),
+            f"read picture setting {key}",
         )
         return result["settings"][key]
 
@@ -103,13 +137,21 @@ class TvController:
             "onclose": {"uri": uri, "params": params},
             "onfail": {"uri": uri, "params": params},
         }
-        result = await self.client.request("system.notifications/createAlert", payload)
+        result = await self._request_with_timeout(
+            self.client.request("system.notifications/createAlert", payload),
+            f"create hidden settings alert for {uri}",
+            timeout=TV_HIDDEN_SETTINGS_TIMEOUT,
+        )
         if not result.get("returnValue"):
             raise RuntimeError(f"createAlert failed for {uri}: {result}")
 
         alert_id = result.get("alertId")
         if alert_id:
-            close = await self.client.request("system.notifications/closeAlert", {"alertId": alert_id})
+            close = await self._request_with_timeout(
+                self.client.request("system.notifications/closeAlert", {"alertId": alert_id}),
+                f"close hidden settings alert for {uri}",
+                timeout=TV_HIDDEN_SETTINGS_TIMEOUT,
+            )
             if not close.get("returnValue"):
                 raise RuntimeError(f"closeAlert failed for {uri}: {close}")
 
@@ -117,9 +159,12 @@ class TvController:
         """Return to the Fedora HDMI app if a previous step opened another app."""
 
         assert self.client is not None
-        current_app = await self.client.get_current_app()
+        current_app = await self._request_with_timeout(self.client.get_current_app(), "get current app")
         if current_app != self.input_app_id:
-            await self.client.launch_app(self.input_app_id)
+            await self._request_with_timeout(
+                self.client.launch_app(self.input_app_id),
+                f"launch {self.input_app_id}",
+            )
             await asyncio.sleep(delay)
 
     async def _set_hidden_other_settings(self, settings: dict[str, Any], description: str) -> None:
@@ -138,7 +183,12 @@ class TvController:
         """
 
         port = self._input_port_number()
-        on_off = lambda value: "on" if value else "off"
+
+        def on_off(value: bool) -> str:
+            return "on" if value else "off"
+
+        input_optimization = "on" if state.allm else "off"
+        quick_game = on_off(state.allm)
 
         if state.game_optimizer_master:
             await self._set_hidden_other_settings(
@@ -146,20 +196,34 @@ class TvController:
                 f"Game Optimizer master for HDMI {port} to on",
             )
             await self._set_hidden_other_settings(
-                {"gameOptimization": on_off(state.vrr)},
+                {
+                    "gameOptimization": on_off(state.vrr),
+                    f"gameOptimizationHDMI{port}": on_off(state.vrr),
+                },
                 f"VRR & G-Sync to {on_off(state.vrr)}",
             )
             await self._set_hidden_other_settings(
-                {"enableALLM": on_off(state.allm)},
+                {
+                    "enableALLM": on_off(state.allm),
+                    "inputOptimization": input_optimization,
+                    "enableQuickGame": quick_game,
+                },
                 f"ALLM to {on_off(state.allm)}",
             )
         else:
             await self._set_hidden_other_settings(
-                {"gameOptimization": on_off(state.vrr)},
+                {
+                    "gameOptimization": on_off(state.vrr),
+                    f"gameOptimizationHDMI{port}": on_off(state.vrr),
+                },
                 f"VRR & G-Sync to {on_off(state.vrr)}",
             )
             await self._set_hidden_other_settings(
-                {"enableALLM": on_off(state.allm)},
+                {
+                    "enableALLM": on_off(state.allm),
+                    "inputOptimization": input_optimization,
+                    "enableQuickGame": quick_game,
+                },
                 f"ALLM to {on_off(state.allm)}",
             )
             await self._set_hidden_other_settings(
@@ -172,6 +236,19 @@ class TvController:
             f"4:4:4 Pass Through for HDMI {port} to {on_off(state.passthrough_444)}",
         )
         await asyncio.sleep(1.0)
+
+    async def _capture_ui_hdmi_feature_state(self) -> HdmiFeatureState:
+        """Read the visible HDMI/Game Optimizer state through the TV UI."""
+
+        assert self.ui is not None
+        ui_state = await self.ui.capture_hdmi_settings_state()
+        ui_state.update(await self.ui.capture_game_optimizer_state())
+        return HdmiFeatureState(
+            passthrough_444=bool(ui_state["passthrough_444"]),
+            game_optimizer_master=bool(ui_state["game_optimizer_master"]),
+            vrr=bool(ui_state["vrr"]),
+            allm=bool(ui_state["allm"]),
+        )
 
     async def _wait_for_value(
         self,
@@ -201,21 +278,13 @@ class TvController:
         hdmi_features: HdmiFeatureState | None = None
 
         if include_ui_state:
-            assert self.ui is not None
             try:
-                ui_state = await self.ui.capture_hdmi_settings_state()
-                ui_state.update(await self.ui.capture_game_optimizer_state())
-                hdmi_features = HdmiFeatureState(
-                    passthrough_444=bool(ui_state["passthrough_444"]),
-                    game_optimizer_master=bool(ui_state["game_optimizer_master"]),
-                    vrr=bool(ui_state["vrr"]),
-                    allm=bool(ui_state["allm"]),
-                )
+                hdmi_features = await self._capture_ui_hdmi_feature_state()
             except Exception as err:
                 log(f"TV UI state capture failed, continuing without it: {err}")
 
         self.saved_state = SavedTvState(
-            current_app=await self.client.get_current_app(),
+            current_app=await self._request_with_timeout(self.client.get_current_app(), "get current app"),
             label=input_info["label"],
             icon=icon,
             picture_mode=picture_mode,
@@ -230,7 +299,7 @@ class TvController:
         assert self.ui is not None
         input_info = await self._get_input_info()
         payload = {
-            "current_app": await self.client.get_current_app(),
+            "current_app": await self._request_with_timeout(self.client.get_current_app(), "get current app"),
             "input": input_info,
             "picture_mode": await self._get_picture_mode(),
         }
@@ -241,7 +310,7 @@ class TvController:
             payload["ui_error"] = str(err)
         return payload
 
-    async def apply_profile(self, profile: TvProfile, *, allow_ui_fallback: bool, dry_run: bool) -> None:
+    async def apply_profile(self, profile: TvProfile, *, dry_run: bool) -> None:
         """Apply a TV profile and verify each direct setting that can be verified."""
 
         assert self.client is not None
@@ -271,7 +340,10 @@ class TvController:
         if input_info["label"] != profile.label or current_icon != profile.icon:
             try:
                 log(f"Setting {self.input_id} label/icon to {profile.label}/{profile.icon}.")
-                await self.client.set_device_info(self.input_id, profile.icon, profile.label)
+                await self._request_with_timeout(
+                    self.client.set_device_info(self.input_id, profile.icon, profile.label),
+                    f"set {self.input_id} label/icon to {profile.label}/{profile.icon}",
+                )
                 await self._wait_for_value(
                     self._get_input_info,
                     lambda info: info["label"] == profile.label and Path(info["icon"]).stem == profile.icon,
@@ -285,36 +357,12 @@ class TvController:
             log(f"{self.input_id} label/icon already at {profile.label}/{profile.icon}.")
 
         if profile.hdmi_features is not None:
-            direct_hidden_applied = False
             try:
                 await self._apply_hidden_hdmi_state(profile.hdmi_features)
-                direct_hidden_applied = True
             except Exception as err:
                 message = f"Direct HDMI/Game Optimizer state change failed: {err}"
                 self.failures.append(message)
                 log(message)
-
-            await self._ensure_input_active()
-
-            if not direct_hidden_applied and allow_ui_fallback:
-                assert self.ui is not None
-                try:
-                    await self.ui.set_hdmi_444_passthrough(profile.hdmi_features.passthrough_444)
-                except Exception as err:
-                    message = f"4:4:4 Pass Through change failed: {err}"
-                    self.failures.append(message)
-                    log(message)
-
-                try:
-                    await self.ui.set_game_optimizer_state(
-                        master_enabled=profile.hdmi_features.game_optimizer_master,
-                        vrr_enabled=profile.hdmi_features.vrr,
-                        allm_enabled=profile.hdmi_features.allm,
-                    )
-                except Exception as err:
-                    message = f"Game Optimizer UI change failed: {err}"
-                    self.failures.append(message)
-                    log(message)
 
             await self._ensure_input_active()
 
@@ -325,10 +373,16 @@ class TvController:
             else:
                 log(f"Reapplying current picture mode {profile.picture_mode}.")
             try:
-                await self.client.set_system_picture_mode(profile.picture_mode)
+                await self._request_with_timeout(
+                    self.client.set_system_picture_mode(profile.picture_mode),
+                    f"set picture mode to {profile.picture_mode}",
+                )
             except Exception as system_err:
-                log(f"set_system_picture_mode failed, retrying legacy picture-mode call: {system_err}")
-                await self.client.set_current_picture_mode(profile.picture_mode)
+                log(f"set_system_picture_mode is not supported here, retrying legacy picture-mode call: {system_err}")
+                await self._request_with_timeout(
+                    self.client.set_current_picture_mode(profile.picture_mode),
+                    f"set legacy picture mode to {profile.picture_mode}",
+                )
             try:
                 await self._wait_for_value(
                     self._get_picture_mode,
@@ -337,7 +391,10 @@ class TvController:
                 )
             except Exception as verify_err:
                 log(f"Primary picture-mode write did not verify, retrying legacy call: {verify_err}")
-                await self.client.set_current_picture_mode(profile.picture_mode)
+                await self._request_with_timeout(
+                    self.client.set_current_picture_mode(profile.picture_mode),
+                    f"retry legacy picture mode to {profile.picture_mode}",
+                )
                 await self._wait_for_value(
                     self._get_picture_mode,
                     lambda mode: mode == profile.picture_mode,
@@ -352,27 +409,33 @@ class TvController:
         if profile.tru_motion is not None:
             try:
                 log(f"Setting truMotionMode to {profile.tru_motion} for {self.input_id.lower()} / {profile.picture_mode}.")
-                await self.client.set_picture_settings(
-                    {"truMotionMode": profile.tru_motion},
-                    profile.picture_mode,
-                    self.input_id.lower(),
-                    current_app=True,
+                await self._request_with_timeout(
+                    self.client.set_picture_settings(
+                        {"truMotionMode": profile.tru_motion},
+                        profile.picture_mode,
+                        self.input_id.lower(),
+                        current_app=True,
+                    ),
+                    f"set truMotionMode to {profile.tru_motion}",
                 )
                 await asyncio.sleep(0.5)
             except Exception as err:
                 try:
                     log(f"Mode-specific truMotion write failed, retrying current-app write: {err}")
-                    await self.client.set_settings("picture", {"truMotionMode": profile.tru_motion}, current_app=True)
+                    await self._request_with_timeout(
+                        self.client.set_settings("picture", {"truMotionMode": profile.tru_motion}, current_app=True),
+                        f"retry truMotionMode to {profile.tru_motion}",
+                    )
                     await asyncio.sleep(0.5)
                 except Exception as retry_err:
                     message = f"TV truMotion change failed: {retry_err}"
                     self.failures.append(message)
                     log(message)
 
-    async def restore(self, *, dry_run: bool, allow_ui_fallback: bool = True) -> None:
+    async def restore(self, *, dry_run: bool) -> None:
         """Restore the exact TV state captured before playback."""
 
         if self.saved_state is None:
             return
         log("Restoring captured TV state.")
-        await self.apply_profile(self.saved_state.as_profile(), allow_ui_fallback=allow_ui_fallback, dry_run=dry_run)
+        await self.apply_profile(self.saved_state.as_profile(), dry_run=dry_run)

@@ -101,14 +101,15 @@ The hidden-setting route uses a deliberate workaround:
 
 This is significantly faster and more reliable than walking the TV UI.
 
-### 4. TV UI fallback and exploration
+### 4. TV UI exploration and state probes
 
 `src/lg_tv_automation/tv_ui.py` and `src/lg_tv_automation/cli/ui_probe.py` are
-kept on purpose even though direct hidden writes are the preferred path.
+kept on purpose even though direct hidden writes are the preferred playback
+control path.
 
 They are useful when:
 
-- LG firmware changes break the hidden-setting method
+- status output or exact-state capture needs UI-visible HDMI/Game Optimizer data
 - additional undocumented settings need to be discovered
 - visual confirmation of a UI-only control path is needed
 

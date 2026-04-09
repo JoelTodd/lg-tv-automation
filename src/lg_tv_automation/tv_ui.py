@@ -1,13 +1,8 @@
-"""Fallback TV UI automation and screenshot-driven state probes.
+"""Screenshot-driven TV UI automation used for status checks and exploration.
 
-This module remains in the repo for two reasons:
-
-1. It is still useful for exploratory work when LG exposes no documented API.
-2. It provides a fallback path if the hidden settings writes stop working on a
-   future firmware version.
-
-The primary movie/desktop preset flow should prefer direct hidden setting writes
-from :mod:`lg_tv_automation.tv` because they are much faster and more reliable.
+This module remains in the repo because it is still useful for exploratory work
+when LG exposes no documented API, and for reading UI-visible state that the
+main control path cannot fetch directly.
 """
 
 from __future__ import annotations
@@ -21,11 +16,8 @@ import urllib.request
 from bscpylgtv import WebOsClient
 from PIL import Image
 
-from .console import log
-
-
 class LgTvUiAutomation:
-    """Send remote keys and inspect screenshots to read or toggle TV UI state."""
+    """Send remote keys and inspect screenshots to read TV UI state."""
 
     MASTER_SWITCH_BOX = (449, 40, 492, 72)
     ROW_SWITCH_BOX = (455, 445, 494, 474)
@@ -92,7 +84,7 @@ class LgTvUiAutomation:
         return count
 
     def detect_master_on(self, image: Image.Image) -> bool:
-        return self._saturated_pixel_count(image, self.MASTER_SWITCH_BOX, 0.72, 0.92) > 900
+        return self._saturated_pixel_count(image, self.MASTER_SWITCH_BOX, 0.72, 0.92) > 650
 
     def detect_row_toggle_on(self, image: Image.Image) -> bool:
         return self._saturated_pixel_count(image, self.ROW_SWITCH_BOX, 0.72, 0.92) > 150
@@ -176,29 +168,6 @@ class LgTvUiAutomation:
             except Exception:
                 pass
 
-    async def set_hdmi_444_passthrough(self, enabled: bool) -> None:
-        """Toggle 4:4:4 Pass Through via the visible HDMI Settings page."""
-
-        try:
-            image = await self.open_hdmi_settings()
-            if not self.detect_hdmi_settings_page(image):
-                raise RuntimeError("HDMI Settings page verification failed.")
-            current = self.detect_444_on(image)
-            if current != enabled:
-                log(f"Setting 4:4:4 Pass Through to {'on' if enabled else 'off'}.")
-                await self._press("ENTER", 0.9)
-                image = await self._capture_image()
-                if not self.detect_hdmi_settings_page(image):
-                    raise RuntimeError("4:4:4 toggle left the HDMI Settings page unexpectedly.")
-                current = self.detect_444_on(image)
-                if current != enabled:
-                    raise RuntimeError("4:4:4 Pass Through did not reach the requested state.")
-        finally:
-            try:
-                await self.close_overlay()
-            except Exception:
-                pass
-
     async def open_game_optimizer_master(self) -> Image.Image:
         await self.ensure_input_active()
         await self.client.launch_app("com.webos.app.gameoptimizer")
@@ -229,56 +198,6 @@ class LgTvUiAutomation:
                 await self._press("ENTER", 0.9)
 
             return {"game_optimizer_master": master_on, "vrr": vrr_on, "allm": allm_on}
-        finally:
-            try:
-                await self.close_overlay()
-            except Exception:
-                pass
-
-    async def set_game_optimizer_state(self, *, master_enabled: bool, vrr_enabled: bool, allm_enabled: bool) -> None:
-        """Toggle Game Optimizer master, VRR, and ALLM through the visible UI."""
-
-        try:
-            desired_master = master_enabled
-            master_image = await self.open_game_optimizer_master()
-            master_on = self.detect_master_on(master_image)
-
-            if not master_on:
-                log("Turning Game Optimizer master switch on.")
-                await self._press("ENTER", 0.9)
-                master_on = True
-
-            await self._press_many("DOWN", 7, 0.2)
-            vrr_image = await self._capture_image()
-            current_vrr = self.detect_row_toggle_on(vrr_image)
-            if current_vrr != vrr_enabled:
-                log(f"Setting VRR & G-Sync to {'on' if vrr_enabled else 'off'}.")
-                await self._press("ENTER", 0.9)
-                vrr_image = await self._capture_image()
-                current_vrr = self.detect_row_toggle_on(vrr_image)
-                if current_vrr != vrr_enabled:
-                    raise RuntimeError("VRR & G-Sync did not reach the requested state.")
-
-            await self._press_many("DOWN", 3, 0.2)
-            allm_image = await self._capture_image()
-            current_allm = self.detect_row_toggle_on(allm_image)
-            if current_allm != allm_enabled:
-                log(f"Setting ALLM to {'on' if allm_enabled else 'off'}.")
-                await self._press("ENTER", 0.9)
-                allm_image = await self._capture_image()
-                current_allm = self.detect_row_toggle_on(allm_image)
-                if current_allm != allm_enabled:
-                    raise RuntimeError("ALLM did not reach the requested state.")
-
-            await self._press_many("UP", 10, 0.2)
-
-            if desired_master != master_on:
-                log(f"Turning Game Optimizer master switch {'on' if desired_master else 'off'}.")
-                await self._press("ENTER", 0.9)
-                master_image = await self._capture_image()
-                master_on = self.detect_master_on(master_image)
-                if master_on != desired_master:
-                    raise RuntimeError("Game Optimizer master switch did not reach the requested state.")
         finally:
             try:
                 await self.close_overlay()
