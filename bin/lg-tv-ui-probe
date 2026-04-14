@@ -1,17 +1,13 @@
-#!/usr/bin/env python3
-"""Repo-local launcher for the screenshot probe CLI."""
+#!/usr/bin/env bash
+set -euo pipefail
 
-from __future__ import annotations
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+ENTRYPOINT="$REPO_ROOT/.venv/bin/lg-tv-ui-probe"
 
-import sys
-from pathlib import Path
+if [[ ! -x "$ENTRYPOINT" ]]; then
+    printf "Missing project environment. Run: cd %q && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'\n" "$REPO_ROOT" >&2
+    exit 1
+fi
 
-REPO_SRC = Path(__file__).resolve().parents[1] / "src"
-if str(REPO_SRC) not in sys.path:
-    sys.path.insert(0, str(REPO_SRC))
-
-from lg_tv_automation.cli.ui_probe import main
-
-
-if __name__ == "__main__":
-    main()
+exec "$ENTRYPOINT" "$@"

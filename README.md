@@ -42,6 +42,7 @@ lg-tv-automation/
 │   ├── lg-tv-play
 │   └── lg-tv-ui-probe
 ├── docs/
+│   ├── handoff-hdr-vrr-allm-investigation-2026-04-09.md
 │   └── handoff-kde-discover-output-state.md
 ├── src/lg_tv_automation/
 │   ├── cli/
@@ -213,32 +214,48 @@ System tools expected on the Fedora host:
 - `ffprobe`
 - `kscreen-doctor`
 
-Python packages expected in the active interpreter:
+Python packages expected in a project-local `.venv`:
 
 - `bscpylgtv`
 - `Pillow`
+- `pytest`
 
-The repo also includes a `pyproject.toml` so it can be installed in editable
-mode later if desired:
+The checked-in `bin/` launchers resolve the real repo path and execute the
+entrypoints from that `.venv` directly. That means symlinks such as
+`~/.local/bin/lg-tv-play` still run against the repo-managed environment
+instead of falling back to Fedora's system `python3`.
+
+One setup path is:
 
 ```bash
-python3 -m pip install --user -e /home/joel/lg-tv-automation
+cd /home/joel/lg-tv-automation
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
 ```
 
-That step is optional because the checked-in `bin/` launchers already insert the
-local `src/` directory into `sys.path`.
+If you prefer `uv`, `uv sync --extra dev` also produces the expected `.venv`.
+
+Use the repo through the checked-in launchers or the environment's console
+scripts:
+
+```bash
+.venv/bin/lg-tv-play --status
+.venv/bin/lg-tv-ui-probe --out-dir /tmp/lg-probe --status --before
+```
+
+Direct calls to `bin/lg-tv-play` or `bin/lg-tv-ui-probe` use the same
+environment.
 
 ## Validation
 
 The safe local checks are:
 
 ```bash
-python3 -m py_compile \
+bash -n \
   /home/joel/lg-tv-automation/bin/lg-tv-play \
   /home/joel/lg-tv-automation/bin/lg-tv-ui-probe
 
-PYTHONPATH=/home/joel/lg-tv-automation/src \
-  python3 -m unittest discover -s /home/joel/lg-tv-automation/tests
+/home/joel/lg-tv-automation/.venv/bin/pytest -q
 ```
 
 The live hardware checks that matter are:
