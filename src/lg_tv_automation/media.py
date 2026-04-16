@@ -47,6 +47,27 @@ def normalize_mpv_args(raw_args: list[str]) -> list[str]:
     return mpv_args
 
 
+def resolve_primary_media_arg(mpv_args: list[str]) -> tuple[list[str], str | None]:
+    """Replace a directory input with the resolved primary media file."""
+
+    resolved_args = mpv_args[:]
+    for index, arg in enumerate(resolved_args):
+        if arg == "--" or arg.startswith("-"):
+            continue
+
+        candidate = Path(arg).expanduser()
+        if not candidate.exists():
+            continue
+
+        resolved_path = resolve_probe_path(candidate)
+        if resolved_path != candidate:
+            resolved_args[index] = str(resolved_path)
+            return resolved_args, f"{candidate} -> {resolved_path}"
+        return resolved_args, None
+
+    return resolved_args, None
+
+
 def find_primary_media_path(mpv_args: list[str]) -> Path | None:
     """Pick the first existing non-option path from the mpv argument list."""
 

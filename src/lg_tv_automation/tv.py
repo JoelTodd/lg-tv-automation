@@ -26,6 +26,7 @@ Predicate = Callable[[Any], bool]
 TV_CONNECT_TIMEOUT = 8.0
 TV_REQUEST_TIMEOUT = 5.0
 TV_HIDDEN_SETTINGS_TIMEOUT = 3.0
+TV_UI_CAPTURE_TIMEOUT = 6.0
 
 
 class TvController:
@@ -241,8 +242,18 @@ class TvController:
         """Read the visible HDMI/Game Optimizer state through the TV UI."""
 
         assert self.ui is not None
-        ui_state = await self.ui.capture_hdmi_settings_state()
-        ui_state.update(await self.ui.capture_game_optimizer_state())
+        ui_state = await self._request_with_timeout(
+            self.ui.capture_hdmi_settings_state(),
+            "capture HDMI settings UI state",
+            timeout=TV_UI_CAPTURE_TIMEOUT,
+        )
+        ui_state.update(
+            await self._request_with_timeout(
+                self.ui.capture_game_optimizer_state(),
+                "capture Game Optimizer UI state",
+                timeout=TV_UI_CAPTURE_TIMEOUT,
+            )
+        )
         return HdmiFeatureState(
             passthrough_444=bool(ui_state["passthrough_444"]),
             game_optimizer_master=bool(ui_state["game_optimizer_master"]),
@@ -304,11 +315,32 @@ class TvController:
             "picture_mode": await self._get_picture_mode(),
         }
         try:
-            payload.update(await self.ui.capture_hdmi_settings_state())
-            payload.update(await self.ui.capture_game_optimizer_state())
+            payload.update(
+                await self._request_with_timeout(
+                    self.ui.capture_hdmi_settings_state(),
+                    "capture HDMI settings UI state",
+                    timeout=TV_UI_CAPTURE_TIMEOUT,
+                )
+            )
+            payload.update(
+                await self._request_with_timeout(
+                    self.ui.capture_game_optimizer_state(),
+                    "capture Game Optimizer UI state",
+                    timeout=TV_UI_CAPTURE_TIMEOUT,
+                )
+            )
         except Exception as err:
             payload["ui_error"] = str(err)
         return payload
+
+    def critical_failures(self) -> list[str]:
+        """Return the subset of apply failures that should abort playback."""
+
+        return [
+            failure
+            for failure in self.failures
+            if not failure.startswith("TV truMotion change failed:")
+        ]
 
     async def apply_profile(self, profile: TvProfile, *, dry_run: bool) -> None:
         """Apply a TV profile and verify each direct setting that can be verified."""
@@ -439,3 +471,6 @@ class TvController:
             return
         log("Restoring captured TV state.")
         await self.apply_profile(self.saved_state.as_profile(), dry_run=dry_run)
+        critical_failures = self.critical_failures()
+        if critical_failures:
+            raise RuntimeError("; ".join(critical_failures))

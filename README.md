@@ -10,6 +10,10 @@ functional. The command surface stays intentionally small:
 - `lg-tv-play`: apply movie mode, apply desktop mode, print status, or wrap `mpv`
 - `lg-tv-ui-probe`: exploratory screenshot-driven UI automation tool
 
+When a local directory is passed to `lg-tv-play`, it resolves that directory to
+the most likely primary media file before both probing and playback. This
+avoids `mpv` treating multi-file release folders as ad-hoc playlists.
+
 ## Scope
 
 The automation is built around these real constraints:
@@ -162,6 +166,9 @@ Status:
 lg-tv-play --status
 lg-tv-play --status --no-tv-ui
 ```
+
+`--status` emits a single JSON document containing both `display` and `tv`
+keys.
 
 Manual movie preset:
 

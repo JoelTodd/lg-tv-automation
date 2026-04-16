@@ -27,7 +27,12 @@ from ..constants import (
     DEFAULT_TV_IP,
 )
 from ..display import DisplayController, load_display_output
-from ..media import choose_display_refresh_rate, choose_hdr_mode, normalize_mpv_args
+from ..media import (
+    choose_display_refresh_rate,
+    choose_hdr_mode,
+    normalize_mpv_args,
+    resolve_primary_media_arg,
+)
 from ..profiles import build_desktop_profile, build_movie_profile
 from ..tv import TvController
 
@@ -228,28 +233,25 @@ async def print_status(args: argparse.Namespace) -> int:
     """Print current display state and optional TV state as JSON."""
 
     output = load_display_output(args.display_output)
-    print(
-        json.dumps(
-            {
-                "display": {
-                    "name": output["name"],
-                    "currentModeId": output["currentModeId"],
-                    "hdr": output["hdr"],
-                    "wcg": output["wcg"],
-                    "vrrPolicy": output.get("vrrPolicy"),
-                }
-            },
-            indent=2,
-        )
-    )
+    payload = {
+        "display": {
+            "name": output["name"],
+            "currentModeId": output["currentModeId"],
+            "hdr": output["hdr"],
+            "wcg": output["wcg"],
+            "vrrPolicy": output.get("vrrPolicy"),
+        }
+    }
     if args.no_tv:
+        print(json.dumps(payload, indent=2))
         return 0
 
     async with TvController(args.tv_ip, args.tv_input) as tv:
         if args.no_tv_ui:
-            print(json.dumps({"tv": await tv.capture(include_ui_state=False)}, indent=2))
+            payload["tv"] = await tv.capture(include_ui_state=False)
         else:
-            print(json.dumps({"tv": await tv.status()}, indent=2))
+            payload["tv"] = await tv.status()
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -271,6 +273,9 @@ async def apply_desktop_preset(
             ),
             dry_run=args.dry_run,
         )
+        critical_failures = tv.critical_failures()
+        if critical_failures:
+            raise RuntimeError("; ".join(critical_failures))
 
 
 async def run_cleanup_step(operation: Callable[[], Awaitable[None]], description: str) -> bool:
@@ -304,7 +309,11 @@ async def async_main() -> int:
 
     args = parse_args()
     mpv_args = normalize_mpv_args(args.mpv_args)
+    mpv_args, resolved_media_reason = resolve_primary_media_arg(mpv_args)
     debug_log_path = Path(args.debug_log).expanduser() if args.debug_log else None
+
+    if resolved_media_reason is not None:
+        log(f"Resolved directory input to primary media file ({resolved_media_reason})")
 
     if debug_log_path is not None:
         log(f"Debug log: {debug_log_path}")
@@ -333,6 +342,8 @@ async def async_main() -> int:
     include_tv_ui_state = not args.no_tv_ui and not args.no_tv
     restore_saved_state = args.restore_saved_state
     cleanup_interrupted = False
+    setup_failures: list[str] = []
+    cleanup_failures: list[str] = []
 
     want_hdr = False
     target_refresh: float | None = None
@@ -371,7 +382,9 @@ async def async_main() -> int:
                         dry_run=args.dry_run,
                     )
             except Exception as err:
-                log(f"Display automation failed, continuing without it: {err}")
+                message = f"Display automation failed: {err}"
+                setup_failures.append(message)
+                log(message)
                 display = None
 
         if not args.no_tv:
@@ -399,8 +412,13 @@ async def async_main() -> int:
                         ),
                         dry_run=args.dry_run,
                     )
+                    critical_failures = tv.critical_failures()
+                    if critical_failures:
+                        raise RuntimeError("; ".join(critical_failures))
             except Exception as err:
-                log(f"TV automation failed, continuing without it: {err}")
+                message = f"TV automation failed: {err}"
+                setup_failures.append(message)
+                log(message)
                 if tv is not None:
                     try:
                         await tv.__aexit__(None, None, None)
@@ -415,7 +433,14 @@ async def async_main() -> int:
         )
 
         if args.movie_mode or args.desktop_mode:
+            if setup_failures:
+                log("Preset apply failed; aborting with a non-zero exit status.")
+                return 1
             return 0
+
+        if setup_failures:
+            log("Playback setup failed; aborting before launching mpv.")
+            return 1
 
         if args.dry_run:
             log(f"Would run: mpv {' '.join(mpv_args)}")
@@ -429,6 +454,18 @@ async def async_main() -> int:
             tv=tv,
         )
     finally:
+        if display is not None:
+            try:
+                if should_cleanup_after_run:
+                    if restore_saved_state:
+                        display.restore(dry_run=args.dry_run)
+                    else:
+                        display.apply_desktop_state(dry_run=args.dry_run)
+            except Exception as err:
+                message = f"Display restore failed: {err}"
+                cleanup_failures.append(message)
+                log(message)
+
         if tv is not None:
             try:
                 if should_cleanup_after_run:
@@ -443,7 +480,9 @@ async def async_main() -> int:
                             "TV desktop-preset restore",
                         ) or cleanup_interrupted
             except Exception as err:
-                log(f"TV restore failed: {err}")
+                message = f"TV restore failed: {err}"
+                cleanup_failures.append(message)
+                log(message)
             append_debug_event(
                 debug_log_path,
                 "after_tv_restore",
@@ -455,17 +494,9 @@ async def async_main() -> int:
                     "TV disconnect",
                 ) or cleanup_interrupted
             except Exception as err:
-                log(f"TV disconnect failed: {err}")
-
-        if display is not None:
-            try:
-                if should_cleanup_after_run:
-                    if restore_saved_state:
-                        display.restore(dry_run=args.dry_run)
-                    else:
-                        display.apply_desktop_state(dry_run=args.dry_run)
-            except Exception as err:
-                log(f"Display restore failed: {err}")
+                message = f"TV disconnect failed: {err}"
+                cleanup_failures.append(message)
+                log(message)
 
         append_debug_event(
             debug_log_path,
@@ -475,6 +506,8 @@ async def async_main() -> int:
 
     if cleanup_interrupted:
         return 130
+    if cleanup_failures and mpv_returncode == 0:
+        return 1
     return mpv_returncode
 
 
