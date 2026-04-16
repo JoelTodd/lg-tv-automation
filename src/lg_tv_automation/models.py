@@ -57,6 +57,7 @@ class SavedTvState:
     picture_mode: str
     app_id: str
     hdmi_features: HdmiFeatureState | None = None
+    exact: bool = True
 
     def as_profile(self) -> TvProfile:
         """Convert the captured state into a re-applicable profile."""
@@ -78,6 +79,7 @@ class SavedTvState:
             "icon": self.icon,
             "picture_mode": self.picture_mode,
             "app_id": self.app_id,
+            "exact": self.exact,
         }
         if self.hdmi_features is not None:
             payload.update(self.hdmi_features.as_dict())

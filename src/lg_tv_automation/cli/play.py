@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import json
+import os
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,9 @@ from ..media import (
 )
 from ..profiles import build_desktop_profile, build_movie_profile
 from ..tv import TvController
+
+
+LOCK_FILENAME = "lg-tv-play.lock"
 
 
 def snapshot_display_state(output_name: str) -> dict[str, Any]:
@@ -81,6 +87,45 @@ def append_debug_event(debug_log_path: Path | None, event: str, payload: dict[st
     }
     with debug_log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def lock_path() -> Path:
+    """Return the lock file used to coordinate CLI invocations."""
+
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    base_dir = Path(runtime_dir) if runtime_dir else Path("/tmp")
+    return base_dir / LOCK_FILENAME
+
+
+@contextmanager
+def session_lock(*, shared: bool):
+    """Prevent concurrent stateful runs from stepping on each other."""
+
+    path = lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    flags = (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB
+
+    try:
+        try:
+            fcntl.flock(handle.fileno(), flags)
+        except BlockingIOError as err:
+            if shared:
+                raise RuntimeError("Another lg-tv-play run is active; status is blocked until it finishes.") from err
+            raise RuntimeError("Another lg-tv-play run is already controlling the TV/display.") from err
+
+        if not shared:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 async def run_mpv_with_debug(
@@ -328,187 +373,204 @@ async def async_main() -> int:
             },
         )
 
-    if args.status:
-        return await print_status(args)
-
-    apply_only_mode = args.movie_mode or args.desktop_mode
-    if not apply_only_mode and not mpv_args:
-        raise SystemExit("No mpv arguments provided.")
-
-    display: DisplayController | None = None
-    tv: TvController | None = None
-    mpv_returncode = 0
-    should_cleanup_after_run = not apply_only_mode
-    include_tv_ui_state = not args.no_tv_ui and not args.no_tv
-    restore_saved_state = args.restore_saved_state
-    cleanup_interrupted = False
-    setup_failures: list[str] = []
-    cleanup_failures: list[str] = []
-
-    want_hdr = False
-    target_refresh: float | None = None
-    if args.desktop_mode:
-        log(
-            "Applying desktop preset: non-HDR display, "
-            f"{args.desktop_picture_mode} on the TV, 4:4:4 on, Game Optimizer on, VRR on, ALLM on."
-        )
-    else:
-        want_hdr, hdr_reason = choose_hdr_mode(
-            force_hdr=args.hdr,
-            force_sdr=args.sdr,
-            mpv_args=mpv_args,
-        )
-        log(f"HDR decision: {'HDR' if want_hdr else 'SDR'} ({hdr_reason})")
-        if not args.force_60hz:
-            target_refresh, refresh_reason = choose_display_refresh_rate(mpv_args)
-            if target_refresh is not None:
-                log(f"Refresh decision: {target_refresh:.3f} Hz ({refresh_reason})")
-            else:
-                log(f"Refresh decision: unchanged ({refresh_reason})")
-
     try:
-        if not args.no_display:
-            try:
-                display = DisplayController(args.display_output)
-                if not args.desktop_mode:
-                    display.capture()
-                if args.desktop_mode:
-                    display.apply_desktop_state(dry_run=args.dry_run)
-                else:
-                    display.apply_movie_state(
-                        enable_hdr=want_hdr,
-                        force_60hz=args.force_60hz,
-                        target_refresh=target_refresh,
-                        dry_run=args.dry_run,
-                    )
-            except Exception as err:
-                message = f"Display automation failed: {err}"
-                setup_failures.append(message)
-                log(message)
-                display = None
+        with session_lock(shared=args.status):
+            if args.status:
+                return await print_status(args)
 
-        if not args.no_tv:
-            try:
-                tv = TvController(args.tv_ip, args.tv_input)
-                await tv.__aenter__()
-                if restore_saved_state:
-                    await tv.capture(include_ui_state=include_tv_ui_state and not args.dry_run)
+            if args.restore_saved_state and not args.no_tv and args.no_tv_ui and not args.dry_run:
+                raise SystemExit("--restore-saved-state requires TV UI capture; omit --no-tv-ui.")
 
-                if args.desktop_mode:
-                    await apply_desktop_preset(
-                        args,
-                        None,
-                        tv,
-                    )
+            apply_only_mode = args.movie_mode or args.desktop_mode
+            if not apply_only_mode and not mpv_args:
+                raise SystemExit("No mpv arguments provided.")
+
+            display: DisplayController | None = None
+            tv: TvController | None = None
+            mpv_returncode = 0
+            should_cleanup_after_run = not apply_only_mode
+            include_tv_ui_state = not args.no_tv_ui and not args.no_tv
+            restore_saved_state = args.restore_saved_state
+            cleanup_interrupted = False
+            setup_failures: list[str] = []
+            cleanup_failures: list[str] = []
+
+            want_hdr = False
+            target_refresh: float | None = None
+            if args.desktop_mode:
+                log(
+                    "Applying desktop preset: non-HDR display, "
+                    f"{args.desktop_picture_mode} on the TV, 4:4:4 on, Game Optimizer on, VRR on, ALLM on."
+                )
+            else:
+                want_hdr, hdr_reason = choose_hdr_mode(
+                    force_hdr=args.hdr,
+                    force_sdr=args.sdr,
+                    mpv_args=mpv_args,
+                )
+                log(f"HDR decision: {'HDR' if want_hdr else 'SDR'} ({hdr_reason})")
+                if args.force_60hz:
+                    log("Refresh decision: 60.000 Hz (--force-60hz)")
+                elif args.movie_mode:
+                    log("Refresh decision: unchanged (manual movie preset leaves refresh alone by default)")
                 else:
-                    await tv.apply_profile(
-                        build_movie_profile(
-                            want_hdr=want_hdr,
-                            movie_label=args.movie_label,
-                            movie_icon=args.movie_icon,
-                            sdr_picture_mode=args.sdr_picture_mode,
-                            hdr_picture_mode=args.hdr_picture_mode,
-                            tru_motion=args.tru_motion,
-                        ),
-                        dry_run=args.dry_run,
-                    )
-                    critical_failures = tv.critical_failures()
-                    if critical_failures:
-                        raise RuntimeError("; ".join(critical_failures))
-            except Exception as err:
-                message = f"TV automation failed: {err}"
-                setup_failures.append(message)
-                log(message)
+                    target_refresh, refresh_reason = choose_display_refresh_rate(mpv_args)
+                    if target_refresh is not None:
+                        log(f"Refresh decision: {target_refresh:.3f} Hz ({refresh_reason})")
+                    else:
+                        log(f"Refresh decision: unchanged ({refresh_reason})")
+
+            try:
+                if not args.no_display:
+                    try:
+                        display = DisplayController(args.display_output)
+                        if not args.desktop_mode:
+                            display.capture()
+                        if args.desktop_mode:
+                            display.apply_desktop_state(dry_run=args.dry_run)
+                        else:
+                            display.apply_movie_state(
+                                enable_hdr=want_hdr,
+                                force_60hz=args.force_60hz,
+                                target_refresh=target_refresh,
+                                dry_run=args.dry_run,
+                            )
+                    except Exception as err:
+                        message = f"Display automation failed: {err}"
+                        setup_failures.append(message)
+                        log(message)
+                        display = None
+
+                if not args.no_tv:
+                    try:
+                        tv = TvController(args.tv_ip, args.tv_input)
+                        await tv.__aenter__()
+                        if restore_saved_state:
+                            await tv.capture(
+                                include_ui_state=include_tv_ui_state and not args.dry_run,
+                                require_ui_state=include_tv_ui_state and not args.dry_run,
+                            )
+
+                        if args.desktop_mode:
+                            await apply_desktop_preset(
+                                args,
+                                None,
+                                tv,
+                            )
+                        else:
+                            await tv.apply_profile(
+                                build_movie_profile(
+                                    want_hdr=want_hdr,
+                                    movie_label=args.movie_label,
+                                    movie_icon=args.movie_icon,
+                                    sdr_picture_mode=args.sdr_picture_mode,
+                                    hdr_picture_mode=args.hdr_picture_mode,
+                                    tru_motion=args.tru_motion,
+                                ),
+                                dry_run=args.dry_run,
+                            )
+                            critical_failures = tv.critical_failures(
+                                tolerate_picture_mode=not apply_only_mode
+                            )
+                            if critical_failures:
+                                raise RuntimeError("; ".join(critical_failures))
+                    except Exception as err:
+                        message = f"TV automation failed: {err}"
+                        setup_failures.append(message)
+                        log(message)
+                        if tv is not None:
+                            try:
+                                await tv.__aexit__(None, None, None)
+                            except Exception:
+                                pass
+                        tv = None
+
+                append_debug_event(
+                    debug_log_path,
+                    "after_apply",
+                    await snapshot_runtime_state(args, tv),
+                )
+
+                if args.movie_mode or args.desktop_mode:
+                    if setup_failures:
+                        log("Preset apply failed; aborting with a non-zero exit status.")
+                        return 1
+                    return 0
+
+                if setup_failures:
+                    log("Playback setup failed; aborting before launching mpv.")
+                    return 1
+
+                if args.dry_run:
+                    log(f"Would run: mpv {' '.join(mpv_args)}")
+                    return 0
+
+                mpv_returncode = await run_mpv_with_debug(
+                    mpv_args,
+                    debug_log_path=debug_log_path,
+                    debug_cue_seconds=args.debug_cue_seconds,
+                    args=args,
+                    tv=tv,
+                )
+            finally:
+                if display is not None:
+                    try:
+                        if should_cleanup_after_run:
+                            if restore_saved_state:
+                                display.restore(dry_run=args.dry_run)
+                            else:
+                                display.apply_desktop_state(dry_run=args.dry_run)
+                    except Exception as err:
+                        message = f"Display restore failed: {err}"
+                        cleanup_failures.append(message)
+                        log(message)
+
                 if tv is not None:
                     try:
-                        await tv.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                tv = None
+                        if should_cleanup_after_run:
+                            if restore_saved_state:
+                                cleanup_interrupted = await run_cleanup_step(
+                                    lambda: tv.restore(dry_run=args.dry_run),
+                                    "TV restore",
+                                ) or cleanup_interrupted
+                            else:
+                                cleanup_interrupted = await run_cleanup_step(
+                                    lambda: apply_desktop_preset(args, None, tv),
+                                    "TV desktop-preset restore",
+                                ) or cleanup_interrupted
+                    except Exception as err:
+                        message = f"TV restore failed: {err}"
+                        cleanup_failures.append(message)
+                        log(message)
+                    append_debug_event(
+                        debug_log_path,
+                        "after_tv_restore",
+                        await snapshot_runtime_state(args, tv),
+                    )
+                    try:
+                        cleanup_interrupted = await run_cleanup_step(
+                            lambda: tv.__aexit__(None, None, None),
+                            "TV disconnect",
+                        ) or cleanup_interrupted
+                    except Exception as err:
+                        message = f"TV disconnect failed: {err}"
+                        cleanup_failures.append(message)
+                        log(message)
 
-        append_debug_event(
-            debug_log_path,
-            "after_apply",
-            await snapshot_runtime_state(args, tv),
-        )
+                append_debug_event(
+                    debug_log_path,
+                    "post_restore",
+                    await snapshot_runtime_state(args, None),
+                )
 
-        if args.movie_mode or args.desktop_mode:
-            if setup_failures:
-                log("Preset apply failed; aborting with a non-zero exit status.")
+            if cleanup_interrupted:
+                return 130
+            if cleanup_failures and mpv_returncode == 0:
                 return 1
-            return 0
-
-        if setup_failures:
-            log("Playback setup failed; aborting before launching mpv.")
-            return 1
-
-        if args.dry_run:
-            log(f"Would run: mpv {' '.join(mpv_args)}")
-            return 0
-
-        mpv_returncode = await run_mpv_with_debug(
-            mpv_args,
-            debug_log_path=debug_log_path,
-            debug_cue_seconds=args.debug_cue_seconds,
-            args=args,
-            tv=tv,
-        )
-    finally:
-        if display is not None:
-            try:
-                if should_cleanup_after_run:
-                    if restore_saved_state:
-                        display.restore(dry_run=args.dry_run)
-                    else:
-                        display.apply_desktop_state(dry_run=args.dry_run)
-            except Exception as err:
-                message = f"Display restore failed: {err}"
-                cleanup_failures.append(message)
-                log(message)
-
-        if tv is not None:
-            try:
-                if should_cleanup_after_run:
-                    if restore_saved_state:
-                        cleanup_interrupted = await run_cleanup_step(
-                            lambda: tv.restore(dry_run=args.dry_run),
-                            "TV restore",
-                        ) or cleanup_interrupted
-                    else:
-                        cleanup_interrupted = await run_cleanup_step(
-                            lambda: apply_desktop_preset(args, None, tv),
-                            "TV desktop-preset restore",
-                        ) or cleanup_interrupted
-            except Exception as err:
-                message = f"TV restore failed: {err}"
-                cleanup_failures.append(message)
-                log(message)
-            append_debug_event(
-                debug_log_path,
-                "after_tv_restore",
-                await snapshot_runtime_state(args, tv),
-            )
-            try:
-                cleanup_interrupted = await run_cleanup_step(
-                    lambda: tv.__aexit__(None, None, None),
-                    "TV disconnect",
-                ) or cleanup_interrupted
-            except Exception as err:
-                message = f"TV disconnect failed: {err}"
-                cleanup_failures.append(message)
-                log(message)
-
-        append_debug_event(
-            debug_log_path,
-            "post_restore",
-            await snapshot_runtime_state(args, None),
-        )
-
-    if cleanup_interrupted:
-        return 130
-    if cleanup_failures and mpv_returncode == 0:
+            return mpv_returncode
+    except RuntimeError as err:
+        log(str(err))
         return 1
-    return mpv_returncode
 
 
 def main() -> None:

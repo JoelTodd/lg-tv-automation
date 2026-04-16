@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from .console import log
+from .constants import DEFAULT_DESKTOP_VRR_POLICY
 from .models import DisplaySnapshot
 from .process import run_command
 
@@ -61,6 +62,20 @@ def current_mode_size(output: dict[str, Any]) -> tuple[int, int] | None:
             size = mode["size"]
             return int(size["width"]), int(size["height"])
     return None
+
+
+def select_highest_refresh_mode_id(output: dict[str, Any], width: int, height: int) -> str | None:
+    """Find the highest-refresh mode id for the requested geometry."""
+
+    best: tuple[float, str] | None = None
+    for mode in output["modes"]:
+        size = mode["size"]
+        if size["width"] != width or size["height"] != height:
+            continue
+        refresh = float(mode["refreshRate"])
+        if best is None or refresh > best[0]:
+            best = (refresh, str(mode["id"]))
+    return None if best is None else best[1]
 
 
 class DisplayController:
@@ -160,12 +175,26 @@ class DisplayController:
         actions: list[str] = []
         target_mode_id: str | None = None
 
-        if self.saved_state is not None and str(output["currentModeId"]) != self.saved_state.mode_id:
-            target_mode_id = self.saved_state.mode_id
-            actions.append(f"output.{self.output_name}.mode.{target_mode_id}")
-        target_vrr_policy = None
-        if self.saved_state is not None and self.saved_state.vrr_policy in VRR_POLICY_TO_NAME:
+        if self.saved_state is not None:
+            if str(output["currentModeId"]) != self.saved_state.mode_id:
+                target_mode_id = self.saved_state.mode_id
+                actions.append(f"output.{self.output_name}.mode.{target_mode_id}")
             target_vrr_policy = self.saved_state.vrr_policy
+        else:
+            target_vrr_policy = DEFAULT_DESKTOP_VRR_POLICY
+            size = current_mode_size(output)
+            if size is None:
+                log("Current display mode size could not be determined; leaving mode unchanged.")
+            else:
+                width, height = size
+                fallback_mode_id = select_highest_refresh_mode_id(output, width, height)
+                if fallback_mode_id is None:
+                    log(f"No desktop-class mode found for {width}x{height}; leaving mode unchanged.")
+                elif str(output["currentModeId"]) != fallback_mode_id:
+                    target_mode_id = fallback_mode_id
+                    actions.append(f"output.{self.output_name}.mode.{target_mode_id}")
+
+        if target_vrr_policy in VRR_POLICY_TO_NAME:
             actions.append(f"output.{self.output_name}.vrrpolicy.{VRR_POLICY_TO_NAME[target_vrr_policy]}")
 
         actions.append(f"output.{self.output_name}.hdr.disable")
@@ -176,7 +205,8 @@ class DisplayController:
             return
 
         run_command(["kscreen-doctor", *actions])
-        if not self._wait_for_state(target_mode_id, False, False, target_vrr_policy):
+        expected_mode_id = target_mode_id if target_mode_id else None
+        if not self._wait_for_state(expected_mode_id, False, False, target_vrr_policy):
             raise RuntimeError("Display state did not reach the requested desktop preset.")
 
     def restore(self, *, dry_run: bool) -> None:

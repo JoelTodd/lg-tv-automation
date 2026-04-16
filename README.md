@@ -135,6 +135,10 @@ Movie mode does the following:
   - `hdrFilmMaker` for HDR
 - set `truMotionMode=cinemaClear`
 
+When `lg-tv-play` launches actual playback rather than `--movie-mode`, it also
+tries to match the display refresh to the source frame rate unless
+`--force-60hz` or the source metadata says to leave the desktop refresh alone.
+
 ### Desktop mode
 
 Desktop mode restores the preferred desktop presentation:
@@ -170,6 +174,8 @@ lg-tv-play --status --no-tv-ui
 `--status` emits a single JSON document containing both `display` and `tv`
 keys.
 
+`--status` does not run concurrently with an active playback or preset session.
+
 Manual movie preset:
 
 ```bash
@@ -201,6 +207,9 @@ lg-tv-play --no-tv -- /path/to/movie.mkv
 lg-tv-play --no-tv-ui -- /path/to/movie.mkv
 lg-tv-play --no-display -- /path/to/movie.mkv
 ```
+
+`--restore-saved-state` requires TV UI capture, so it is incompatible with
+`--no-tv-ui`.
 
 `--no-display` is the preferred escape hatch when you only need the TV-side
 preset change and do not need Fedora HDR/WCG or mode changes. It avoids the

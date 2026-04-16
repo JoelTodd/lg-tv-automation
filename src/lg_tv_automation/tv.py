@@ -26,7 +26,9 @@ Predicate = Callable[[Any], bool]
 TV_CONNECT_TIMEOUT = 8.0
 TV_REQUEST_TIMEOUT = 5.0
 TV_HIDDEN_SETTINGS_TIMEOUT = 3.0
-TV_UI_CAPTURE_TIMEOUT = 6.0
+TV_UI_CAPTURE_TIMEOUT = 45.0
+TV_PICTURE_MODE_VERIFY_TIMEOUT = 8.0
+TV_PICTURE_MODE_RETRY_BACKOFFS = (0.75, 1.5, 2.5, 3.5)
 
 
 class TvController:
@@ -120,6 +122,22 @@ class TvController:
         if not suffix.isdigit():
             raise RuntimeError(f"Could not derive HDMI port number from input id {self.input_id!r}.")
         return suffix
+
+    def _settings_input_name(self) -> str:
+        """Return the input token expected by mode-specific settings APIs."""
+
+        return self.input_id.lower().replace("_", "")
+
+    @staticmethod
+    def _picture_mode_dynamic_range(picture_mode: str) -> str:
+        """Infer the dynamic-range bucket required by ``set_picture_mode``."""
+
+        lowered = picture_mode.lower()
+        if lowered.startswith("dolby"):
+            return "dolbyHdr"
+        if lowered.startswith("hdr"):
+            return "hdr"
+        return "sdr"
 
     async def _alert_luna(self, uri: str, params: dict[str, Any]) -> None:
         """Execute a Luna call through the notifications service.
@@ -242,16 +260,14 @@ class TvController:
         """Read the visible HDMI/Game Optimizer state through the TV UI."""
 
         assert self.ui is not None
-        ui_state = await self._request_with_timeout(
-            self.ui.capture_hdmi_settings_state(),
+        ui_state = await self._capture_ui_probe(
+            self.ui.capture_hdmi_settings_state,
             "capture HDMI settings UI state",
-            timeout=TV_UI_CAPTURE_TIMEOUT,
         )
         ui_state.update(
-            await self._request_with_timeout(
-                self.ui.capture_game_optimizer_state(),
+            await self._capture_ui_probe(
+                self.ui.capture_game_optimizer_state,
                 "capture Game Optimizer UI state",
-                timeout=TV_UI_CAPTURE_TIMEOUT,
             )
         )
         return HdmiFeatureState(
@@ -260,6 +276,31 @@ class TvController:
             vrr=bool(ui_state["vrr"]),
             allm=bool(ui_state["allm"]),
         )
+
+    async def _capture_ui_probe(
+        self,
+        probe: Callable[[], Awaitable[Any]],
+        description: str,
+        *,
+        attempts: int = 2,
+    ) -> Any:
+        """Run a UI probe with one higher-level retry around navigation failures."""
+
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return await self._request_with_timeout(
+                    probe(),
+                    description,
+                    timeout=TV_UI_CAPTURE_TIMEOUT,
+                )
+            except Exception as err:
+                last_error = err
+                if attempt < attempts - 1:
+                    log(f"{description} failed, retrying UI probe: {err}")
+        if last_error is None:
+            raise RuntimeError(f"{description} failed without an explicit error")
+        raise last_error
 
     async def _wait_for_value(
         self,
@@ -280,7 +321,7 @@ class TvController:
             await asyncio.sleep(interval)
         raise RuntimeError(f"{description} verification failed; last value was {last_value!r}")
 
-    async def capture(self, include_ui_state: bool = True) -> dict[str, Any]:
+    async def capture(self, include_ui_state: bool = True, *, require_ui_state: bool = False) -> dict[str, Any]:
         """Capture the current TV state for later restore or for status output."""
 
         input_info = await self._get_input_info()
@@ -292,6 +333,10 @@ class TvController:
             try:
                 hdmi_features = await self._capture_ui_hdmi_feature_state()
             except Exception as err:
+                if require_ui_state:
+                    raise RuntimeError(
+                        f"TV UI state capture failed; exact restore is unavailable: {err}"
+                    ) from err
                 log(f"TV UI state capture failed, continuing without it: {err}")
 
         self.saved_state = SavedTvState(
@@ -301,6 +346,7 @@ class TvController:
             picture_mode=picture_mode,
             app_id=input_info["appId"],
             hdmi_features=hdmi_features,
+            exact=hdmi_features is not None or not include_ui_state,
         )
         return self.saved_state.as_dict()
 
@@ -314,33 +360,119 @@ class TvController:
             "input": input_info,
             "picture_mode": await self._get_picture_mode(),
         }
+        ui_errors: list[str] = []
         try:
             payload.update(
-                await self._request_with_timeout(
-                    self.ui.capture_hdmi_settings_state(),
+                await self._capture_ui_probe(
+                    self.ui.capture_hdmi_settings_state,
                     "capture HDMI settings UI state",
-                    timeout=TV_UI_CAPTURE_TIMEOUT,
-                )
-            )
-            payload.update(
-                await self._request_with_timeout(
-                    self.ui.capture_game_optimizer_state(),
-                    "capture Game Optimizer UI state",
-                    timeout=TV_UI_CAPTURE_TIMEOUT,
                 )
             )
         except Exception as err:
-            payload["ui_error"] = str(err)
+            ui_errors.append(f"HDMI settings: {err}")
+        try:
+            payload.update(
+                await self._capture_ui_probe(
+                    self.ui.capture_game_optimizer_state,
+                    "capture Game Optimizer UI state",
+                )
+            )
+        except Exception as err:
+            ui_errors.append(f"Game Optimizer: {err}")
+        if ui_errors:
+            payload["ui_error"] = "; ".join(ui_errors)
         return payload
 
-    def critical_failures(self) -> list[str]:
+    def critical_failures(self, *, tolerate_picture_mode: bool = False) -> list[str]:
         """Return the subset of apply failures that should abort playback."""
 
         return [
             failure
             for failure in self.failures
             if not failure.startswith("TV truMotion change failed:")
+            and not failure.startswith("TV UI state capture failed:")
+            and (not tolerate_picture_mode or not failure.startswith("TV picture mode change failed:"))
         ]
+
+    async def _set_picture_mode(self, picture_mode: str) -> None:
+        """Apply a picture mode with retries across both available API paths."""
+
+        assert self.client is not None
+        current_picture_mode = await self._get_picture_mode()
+        if current_picture_mode != picture_mode:
+            log(f"Setting current picture mode to {picture_mode}.")
+        else:
+            log(f"Reapplying current picture mode {picture_mode}.")
+
+        async def write_system_mode() -> None:
+            await self._request_with_timeout(
+                self.client.set_system_picture_mode(picture_mode),
+                f"set picture mode to {picture_mode}",
+            )
+
+        async def write_legacy_mode(action: str) -> None:
+            await self._request_with_timeout(
+                self.client.set_current_picture_mode(picture_mode),
+                action,
+            )
+
+        async def write_mode_specific() -> None:
+            await self._request_with_timeout(
+                self.client.set_picture_mode(
+                    picture_mode,
+                    self._settings_input_name(),
+                    dynamic_range=self._picture_mode_dynamic_range(picture_mode),
+                ),
+                f"set mode-specific picture mode to {picture_mode}",
+            )
+
+        async def write_current_app_mode() -> None:
+            await self._request_with_timeout(
+                self.client.set_settings(
+                    "picture",
+                    {"pictureMode": picture_mode},
+                    current_app=True,
+                ),
+                f"set current-app picture mode to {picture_mode}",
+            )
+
+        attempts: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("system picture-mode API", write_system_mode),
+            ("current-app picture-mode API", write_current_app_mode),
+            ("mode-specific picture-mode API", write_mode_specific),
+            (
+                "legacy picture-mode API",
+                lambda: write_legacy_mode(f"retry legacy picture mode to {picture_mode}"),
+            ),
+            (
+                "legacy picture-mode API",
+                lambda: write_legacy_mode(f"final legacy picture mode retry to {picture_mode}"),
+            ),
+        ]
+
+        last_error: Exception | None = None
+        for index, (label, writer) in enumerate(attempts):
+            try:
+                await self._ensure_input_active(delay=0.75)
+                await writer()
+                await self._wait_for_value(
+                    self._get_picture_mode,
+                    lambda mode: mode == picture_mode,
+                    "picture mode",
+                    timeout=TV_PICTURE_MODE_VERIFY_TIMEOUT,
+                )
+                await asyncio.sleep(0.5)
+                return
+            except Exception as err:
+                last_error = err
+                if index < len(attempts) - 1:
+                    log(f"{label} did not verify, retrying next path: {err}")
+                if index < len(TV_PICTURE_MODE_RETRY_BACKOFFS):
+                    await asyncio.sleep(TV_PICTURE_MODE_RETRY_BACKOFFS[index])
+
+        if last_error is None:
+            raise RuntimeError(f"picture mode {picture_mode!r} failed without an explicit error")
+        raise RuntimeError(str(last_error))
 
     async def apply_profile(self, profile: TvProfile, *, dry_run: bool) -> None:
         """Apply a TV profile and verify each direct setting that can be verified."""
@@ -398,41 +530,8 @@ class TvController:
 
             await self._ensure_input_active()
 
-        current_picture_mode = await self._get_picture_mode()
         try:
-            if current_picture_mode != profile.picture_mode:
-                log(f"Setting current picture mode to {profile.picture_mode}.")
-            else:
-                log(f"Reapplying current picture mode {profile.picture_mode}.")
-            try:
-                await self._request_with_timeout(
-                    self.client.set_system_picture_mode(profile.picture_mode),
-                    f"set picture mode to {profile.picture_mode}",
-                )
-            except Exception as system_err:
-                log(f"set_system_picture_mode is not supported here, retrying legacy picture-mode call: {system_err}")
-                await self._request_with_timeout(
-                    self.client.set_current_picture_mode(profile.picture_mode),
-                    f"set legacy picture mode to {profile.picture_mode}",
-                )
-            try:
-                await self._wait_for_value(
-                    self._get_picture_mode,
-                    lambda mode: mode == profile.picture_mode,
-                    "picture mode",
-                )
-            except Exception as verify_err:
-                log(f"Primary picture-mode write did not verify, retrying legacy call: {verify_err}")
-                await self._request_with_timeout(
-                    self.client.set_current_picture_mode(profile.picture_mode),
-                    f"retry legacy picture mode to {profile.picture_mode}",
-                )
-                await self._wait_for_value(
-                    self._get_picture_mode,
-                    lambda mode: mode == profile.picture_mode,
-                    "picture mode",
-                )
-            await asyncio.sleep(0.5)
+            await self._set_picture_mode(profile.picture_mode)
         except Exception as err:
             message = f"TV picture mode change failed: {err}"
             self.failures.append(message)
@@ -445,7 +544,7 @@ class TvController:
                     self.client.set_picture_settings(
                         {"truMotionMode": profile.tru_motion},
                         profile.picture_mode,
-                        self.input_id.lower(),
+                        self._settings_input_name(),
                         current_app=True,
                     ),
                     f"set truMotionMode to {profile.tru_motion}",
