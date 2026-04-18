@@ -244,7 +244,7 @@ instead of falling back to Fedora's system `python3`.
 One setup path is:
 
 ```bash
-cd /home/joel/lg-tv-automation
+cd /home/joel/code/lg-tv-automation
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
@@ -268,10 +268,10 @@ The safe local checks are:
 
 ```bash
 bash -n \
-  /home/joel/lg-tv-automation/bin/lg-tv-play \
-  /home/joel/lg-tv-automation/bin/lg-tv-ui-probe
+  /home/joel/code/lg-tv-automation/bin/lg-tv-play \
+  /home/joel/code/lg-tv-automation/bin/lg-tv-ui-probe
 
-/home/joel/lg-tv-automation/.venv/bin/pytest -q
+/home/joel/code/lg-tv-automation/.venv/bin/pytest -q
 ```
 
 The live hardware checks that matter are:

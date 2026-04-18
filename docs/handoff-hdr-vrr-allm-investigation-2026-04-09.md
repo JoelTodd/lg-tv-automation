@@ -514,7 +514,7 @@ Coverage added in this run includes:
 At the time of the last validation in this run:
 
 - `python3 -m py_compile ...` passed
-- `PYTHONPATH=/home/joel/lg-tv-automation/src python3 -m unittest discover -s /home/joel/lg-tv-automation/tests`
+- `PYTHONPATH=/home/joel/code/lg-tv-automation/src python3 -m unittest discover -s /home/joel/code/lg-tv-automation/tests`
   passed with `22/22`
 
 ## Important Evidence Directories
