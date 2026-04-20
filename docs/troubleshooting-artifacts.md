@@ -43,6 +43,19 @@ Execution timeline:
 /home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames/plans/execution-log-2026-04-16-mpv-dropped-frames.md
 ```
 
+## Legacy UI Evidence
+
+April 9 LG Game Optimizer UI screenshots from the earlier automation
+investigation are preserved outside this checkout:
+
+```text
+/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test
+```
+
+The historical handoff at
+`docs/handoff-hdr-vrr-allm-investigation-2026-04-09.md` still refers to those
+files with their original `tv-pics-test/...` relative paths.
+
 ## What Belongs Here Versus There
 
 Keep in `lg-tv-automation`:

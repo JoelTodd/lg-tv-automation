@@ -54,10 +54,15 @@ Tracked modifications after `c9c9639`:
 - `src/lg_tv_automation/tv_ui.py`
 - `tests/test_helpers.py`
 
-Untracked session artifacts:
+Historical session artifacts from this investigation:
 
-- `.aiopylgtv.sqlite`
-- `tv-pics-test/`
+- TV pairing state now lives outside the repo at
+  `/home/joel/.aiopylgtv.sqlite`; do not keep a repo-local SQLite copy.
+- The original `tv-pics-test/` screenshot evidence was moved out of this
+  checkout on 2026-04-20 to:
+  `/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`
+- `tv-pics-test/...` references below are historical relative paths into that
+  external evidence directory.
 
 ## Investigation Timeline
 
@@ -604,13 +609,14 @@ Important warning:
 
 ## Practical Notes For Future Work
 
-- The repository is still dirty after this session. Do not assume the work is
-  committed.
+- This historical handoff originally described a dirty checkout. Later work has
+  been committed; use `git status` for current truth.
 - The current environment was KDE Wayland on Fedora with NVIDIA and a single
   HDMI-connected LG OLED. That stack behavior matters.
-- `.aiopylgtv.sqlite` appeared during the session and remains untracked.
-- `tv-pics-test/` is session evidence and should be preserved until someone
-  intentionally decides which artifacts belong in-repo long-term.
+- TV pairing state should live at `/home/joel/.aiopylgtv.sqlite`, not in the
+  repository.
+- April 9 UI screenshot evidence is preserved outside the checkout at
+  `/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`.
 
 ## Bottom Line
 
