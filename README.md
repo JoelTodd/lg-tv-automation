@@ -54,6 +54,7 @@ lg-tv-automation/
 │   ├── handoff-kde-discover-output-state.md
 │   └── troubleshooting-artifacts.md
 ├── scripts/
+│   ├── install-command-links.sh
 │   ├── install-edid-override.sh
 │   ├── remove-edid-override.sh
 │   └── verify-edid-override.sh
@@ -200,6 +201,21 @@ When `lg-tv-play` launches `mpv`, it must:
 The code treats that last requirement as hard policy, not best effort.
 
 ## Commands
+
+Install or refresh user-level command links:
+
+```bash
+scripts/install-command-links.sh
+```
+
+That links `~/.local/bin/lg-tv-play`, `~/.local/bin/lg-tv-ui-probe`, and
+`~/.local/bin/lg-tv-edid` to this checkout's `bin/` wrappers. Use system links
+only if you specifically want `sudo lg-tv-edid ...` to resolve without spelling
+the repo script path:
+
+```bash
+sudo scripts/install-command-links.sh --system
+```
 
 Status:
 
