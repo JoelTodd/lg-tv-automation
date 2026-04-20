@@ -1,4 +1,4 @@
-# HDR 119 Hz ALLM/VRR EDID Override
+# HDR 119.88 Hz ALLM/VRR EDID Override
 
 ## Problem
 
@@ -32,6 +32,12 @@ It only removes the HDMI Forum ALLM/VRR advertisement:
 - HDMI Forum VRR minimum refresh set to 0
 - HDMI Forum VRR maximum refresh set to 0
 - CTA checksum recomputed
+
+This is intentionally different from the earlier refresh-rate workaround. The
+current desired state is full HDR/WCG at the normal desktop refresh
+(`3840x2160@119.88`) with ALLM and VRR inactive. `lg-tv-play --match-refresh`
+still exists as an explicit diagnostic or compatibility switch, but it is not
+the primary mitigation.
 
 ## Commands
 
@@ -74,6 +80,10 @@ sudo scripts/remove-edid-override.sh
 Use the checkout-local wrappers when `.venv/bin` is not on `PATH` or when
 `sudo` cannot resolve `lg-tv-edid`.
 
+If command links have been installed with `scripts/install-command-links.sh`,
+both `~/.local/bin/lg-tv-edid` and `/usr/local/bin/lg-tv-edid` should resolve
+to this checkout's `bin/lg-tv-edid` wrapper.
+
 ## Expected Good State
 
 After install and reboot:
@@ -100,6 +110,9 @@ Run:
 lg-tv-play --movie-mode --hdr --no-tv-ui
 lg-tv-edid verify
 ```
+
+Do not use WCG-off as validation. WCG must remain enabled for a full HDR
+presentation.
 
 Then capture the Game Optimizer dashboard with:
 

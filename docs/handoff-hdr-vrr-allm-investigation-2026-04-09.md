@@ -6,6 +6,13 @@ This report covers the full debugging and implementation work performed after
 commit `c9c9639` (`Refactor LG TV automation into a documented repo`) during
 the April 9, 2026 session.
 
+Status as of 2026-04-20: this is a historical handoff, not the current
+remediation plan. The April 16-20 investigation accepted the EDID override in
+`docs/hdr119-allm-vrr-edid-override.md` as the primary mitigation for HDR
+119.88 Hz ALLM/VRR behavior. Current `lg-tv-play` leaves refresh unchanged by
+default; source-refresh matching is available only when `--match-refresh` is
+explicitly requested.
+
 The user-reported symptom was:
 
 - `lg-tv-play` could switch the TV into the correct HDR picture mode for an HDR
@@ -21,9 +28,9 @@ The user also explicitly constrained the design:
 - The agent should do as much live testing as possible instead of pushing
   end-user validation back to the user.
 
-## Current Working Theory
+## April 9 Working Theory
 
-The strongest conclusion reached in this run is:
+The strongest conclusion reached during this run was:
 
 1. There were multiple real bugs in the codebase, and they were fixed.
 2. The visible "VRR ON / Low Latency ON" behavior during playback was not
@@ -33,10 +40,12 @@ The strongest conclusion reached in this run is:
    - 4K120 HDR: TV showed active VRR and Low Latency on.
    - 4K60 HDR: TV still showed active VRR and Low Latency on.
    - 4K24 HDR: TV showed active VRR off and Low Latency off.
-4. The code now auto-matches playback refresh to the source video frame rate,
-   which is the most important fix from this run.
+4. At the end of this run, playback auto-matched refresh to the source video
+   frame rate. That behavior was later changed: after the EDID override became
+   the accepted mitigation, refresh is left unchanged unless `--match-refresh`
+   is explicitly requested.
 
-One caveat remains:
+One caveat remained at the end of this run:
 
 - On this firmware, the detailed Game Optimizer / ALLM preference row can still
   appear enabled even when the top-level dashboard indicators are off during 24
@@ -388,7 +397,7 @@ Why it mattered:
 - It showed that matching playback to 24 Hz disabled the active game-style
   behavior, even though some deeper settings UI still looked sticky.
 
-### 13. Auto-Matching Display Refresh To Source FPS
+### 13. Source-FPS Display Refresh Matching
 
 What changed in `media.py`:
 
@@ -406,8 +415,8 @@ What changed in `display.py`:
 
 What changed in `cli/play.py`:
 
-- Playback runs now call `choose_display_refresh_rate(mpv_args)` unless
-  `--force-60hz` is used.
+- At this point in the investigation, playback runs called
+  `choose_display_refresh_rate(mpv_args)` unless `--force-60hz` was used.
 - The tool logs a line such as:
 
 ```text
@@ -419,11 +428,13 @@ What changed in `cli/play.py`:
 
 Why it mattered:
 
-- This is the most important fix from the run.
-- It changes playback from "inherit the desktop 120 Hz link" to "match the
-  source refresh when possible."
+- This was the most important April 9 finding because it explained why 24 Hz
+  playback looked better than 60 Hz or 120 Hz playback.
+- It was later demoted to an explicit option. The current primary fix is the
+  EDID override, which preserves HDR 119.88 Hz while making the sink
+  VRR-incapable to the host.
 
-## Current Code-Level Outcome
+## Code-Level Outcome From This Historical Run
 
 ### `src/lg_tv_automation/media.py`
 
@@ -434,11 +445,12 @@ Current role:
 - resolves directory inputs to the most likely media file
 - detects HDR from media metadata
 - detects source video frame rate
-- selects a playback refresh target for display-mode switching
+- selects a playback refresh target when `--match-refresh` is requested
 
 Key outcome:
 
-- HDR and refresh decisions are now both media-aware.
+- HDR decisions are media-aware, and refresh matching remains available as an
+  explicit media-aware option.
 
 ### `src/lg_tv_automation/display.py`
 
@@ -447,7 +459,8 @@ Current role:
 - captures display mode, HDR, WCG, and VRR policy
 - forces `vrrpolicy.never` for movie mode
 - restores the previous VRR policy afterward
-- optionally changes output mode to match source refresh
+- optionally changes output mode when `--force-60hz` or `--match-refresh` is
+  requested
 
 Key outcome:
 
@@ -458,7 +471,7 @@ Key outcome:
 Current role:
 
 - handles media-based HDR decision
-- handles media-based refresh decision
+- handles media-based refresh decision when requested
 - supports debug snapshots and synchronized cueing
 - cleans up robustly under cancellation
 
@@ -579,9 +592,10 @@ Important warning:
 - Host-side movie mode now forces `vrrpolicy.never`.
 - Host-side restore now returns to the prior VRR policy.
 - Debug logging exists for synchronized playback diagnosis.
-- Playback now auto-matches display refresh to source FPS when feasible.
+- Playback can match display refresh to source FPS when `--match-refresh` is
+  explicitly requested.
 
-### Still Open / Not Fully Solved
+### Still Open At The End Of This Run
 
 - The detailed Game Optimizer / ALLM preference row may still appear enabled on
   this firmware even when the active dashboard indicators are off at 24 Hz.
@@ -589,28 +603,32 @@ Important warning:
   while preserving the rest of the movie-mode behavior.
 - The `--wayland-content-type=none` change should be treated as a secondary
   mitigation, not the primary explanation.
+- Later work resolved the practical HDR 119.88 Hz stutter/latency symptom with
+  the EDID override documented in `docs/hdr119-allm-vrr-edid-override.md`.
 
 ## Recommended Next Steps For Future Agents
 
-1. Do not restart from the assumption that VRR/ALLM persistence is mainly a TV
+1. Start from `README.md` and `docs/hdr119-allm-vrr-edid-override.md`; those
+   documents describe the current accepted workflow.
+2. Do not restart from the assumption that VRR/ALLM persistence is mainly a TV
    hidden-write bug. That theory was tested hard in this run and was not the
    strongest explanation.
-2. Treat the refresh-matching work as the primary fix path unless new evidence
-   disproves it.
-3. When validating active behavior, prefer:
+3. Treat refresh matching as a diagnostic or compatibility option, not as the
+   current primary mitigation.
+4. When validating active behavior, prefer:
    - host-side machine logs
    - synchronized TV photos
    - controlled live capture directories
-4. Do not rely on screenshot-driven UI automation as the final truth source for
+5. Do not rely on screenshot-driven UI automation as the final truth source for
    active playback state.
-5. If the remaining detailed ALLM row matters enough to chase further, focus on
+6. If the remaining detailed ALLM row matters enough to chase further, focus on
    finding a firmware-specific hidden key for that preference row rather than
    re-litigating the already-tested playback refresh behavior.
 
 ## Practical Notes For Future Work
 
-- This historical handoff originally described a dirty checkout. Later work has
-  been committed; use `git status` for current truth.
+- This historical handoff originally described an uncommitted checkout. Later
+  work has been committed; use `git status` for current truth.
 - The current environment was KDE Wayland on Fedora with NVIDIA and a single
   HDMI-connected LG OLED. That stack behavior matters.
 - TV pairing state should live at `/home/joel/.aiopylgtv.sqlite`, not in the
@@ -621,7 +639,8 @@ Important warning:
 ## Bottom Line
 
 This run fixed several real bugs and narrowed the visible movie-mode issue with
-much better evidence than existed at the start.
+much better evidence than existed at the start. Its refresh-rate conclusion was
+useful historically, but it has been superseded as the primary mitigation.
 
 The most important conclusion is not "LG hidden writes are still broken." The
 most important conclusion is:
@@ -630,4 +649,6 @@ most important conclusion is:
   during playback much more strongly than it tracked repeated hidden off-writes
   sent to the TV
 
-That is why the code now auto-matches the display refresh to the source video.
+That is why this run originally changed the code to auto-match display refresh
+to the source video. Current code keeps that behavior behind `--match-refresh`
+because the EDID override is the accepted HDR 119.88 Hz fix.

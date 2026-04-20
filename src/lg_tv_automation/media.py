@@ -29,10 +29,10 @@ MEDIA_EXTENSIONS = {
 def normalize_mpv_args(raw_args: list[str]) -> list[str]:
     """Normalize launcher-passed mpv arguments.
 
-    On Wayland we default mpv's content-type hint to ``none``. During local
-    validation on KDE Plasma + NVIDIA this prevented the TV from re-enabling
-    Game Optimizer as soon as playback started, while still preserving the
-    intended HDR/picture-mode/movie-processing state.
+    On Wayland we default mpv's content-type hint to ``none``. This is retained
+    as a low-risk presentation hint so mpv does not advertise itself as game
+    content unless the caller explicitly overrides it. It is not the primary
+    HDR 119.88 Hz ALLM/VRR mitigation; the EDID override owns that.
     """
 
     mpv_args = raw_args[:]

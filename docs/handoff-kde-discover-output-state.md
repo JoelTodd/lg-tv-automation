@@ -145,15 +145,16 @@ These are intentionally not recommended unless the repo's scope expands:
 Those ideas conflict with the current design DNA: small command surface, focused
 ownership, and direct control over the TV/display path only.
 
-## Recommended Next Step
+## Documentation Status
 
-The best next step is to update `README.md` so the project states this failure
-mode plainly:
+This note has been folded into `README.md`. The current README states this
+failure mode plainly:
 
 - display changes can temporarily drop the output
 - on this stack, some desktop apps may be left in a stale state afterward
 - `--no-display` is the preferred escape hatch when Fedora-side display changes
   are unnecessary
 
-That keeps the repo honest about the environment it targets while staying fully
-aligned with its current scope.
+Keeping this handoff is still useful because it records the observed KDE
+symptom and the manual recovery command, but the README is the current
+operator-facing source of truth.

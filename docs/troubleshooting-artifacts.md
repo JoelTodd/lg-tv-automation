@@ -7,7 +7,7 @@ stays in:
 /home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames
 ```
 
-## HDR 119 Hz EDID Evidence
+## HDR 119.88 Hz EDID Evidence
 
 Primary external entry point:
 

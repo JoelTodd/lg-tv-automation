@@ -1,4 +1,4 @@
-"""Manage the local HDR 119 Hz LG EDID override."""
+"""Manage the local HDR 119.88 Hz LG EDID override."""
 
 from __future__ import annotations
 
@@ -321,7 +321,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description="Manage the LG HDR 119 Hz EDID override.")
+    parser = argparse.ArgumentParser(description="Manage the LG HDR 119.88 Hz EDID override.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     install_parser = subparsers.add_parser("install", help="Install the patched EDID override.")

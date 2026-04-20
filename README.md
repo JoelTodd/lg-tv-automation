@@ -8,8 +8,18 @@ The repo exists to make the setup understandable and maintainable, not just
 functional. The command surface stays intentionally small:
 
 - `lg-tv-play`: apply movie mode, apply desktop mode, print status, or wrap `mpv`
-- `lg-tv-edid`: manage and verify the local HDR 119 Hz EDID override
+- `lg-tv-edid`: manage and verify the local HDR 119.88 Hz EDID override
 - `lg-tv-ui-probe`: exploratory screenshot-driven UI automation tool
+
+Current operating baseline:
+
+- keep the Fedora desktop link at 4K 119.88 Hz unless a command explicitly asks
+  for refresh switching
+- keep HDR/WCG enabled for HDR playback
+- remove HDMI Forum ALLM/VRR from the live EDID so the LG does not force
+  low-latency behavior at HDR 119.88 Hz
+- use TV hidden-setting writes as a profile-control layer, not as the only
+  mitigation for the HDR 119.88 Hz low-latency issue
 
 When a local directory is passed to `lg-tv-play`, it resolves that directory to
 the most likely primary media file before both probing and playback. This
@@ -31,7 +41,7 @@ This repo therefore automates:
 - TV input relabeling between desktop and movie-friendly states
 - TV picture mode switching between `expert1`, `filmMaker`, and `hdrFilmMaker`
 - `truMotionMode=off` for movie mode
-- local EDID override management for the HDR 119 Hz ALLM/VRR workaround
+- local EDID override management for the HDR 119.88 Hz ALLM/VRR workaround
 - hidden HDMI/Game Optimizer flags:
   - `4:4:4 Pass Through`
   - Game Optimizer master
@@ -209,13 +219,18 @@ scripts/install-command-links.sh
 ```
 
 That links `~/.local/bin/lg-tv-play`, `~/.local/bin/lg-tv-ui-probe`, and
-`~/.local/bin/lg-tv-edid` to this checkout's `bin/` wrappers. Use system links
-only if you specifically want `sudo lg-tv-edid ...` to resolve without spelling
-the repo script path:
+`~/.local/bin/lg-tv-edid` to this checkout's `bin/` wrappers.
+
+Install system command links when `sudo lg-tv-edid ...` should work without
+spelling the repo script path:
 
 ```bash
 sudo scripts/install-command-links.sh --system
 ```
+
+On this Fedora host, `/usr/local/sbin` is a symlink to `/usr/local/bin`, so
+`type -a lg-tv-edid` can show both paths even though there is only one system
+link target.
 
 Status:
 
@@ -327,18 +342,16 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
 
-If you prefer `uv`, `uv sync --extra dev` also produces the expected `.venv`.
-
 Use the repo through the checked-in launchers or the environment's console
 scripts:
 
 ```bash
+.venv/bin/lg-tv-edid verify --no-kscreen
 .venv/bin/lg-tv-play --status
 .venv/bin/lg-tv-ui-probe --out-dir /tmp/lg-probe --status --before
 ```
 
-Direct calls to `bin/lg-tv-play` or `bin/lg-tv-ui-probe` use the same
-environment.
+Direct calls to the `bin/` wrappers use the same environment.
 
 ## Validation
 
@@ -346,10 +359,16 @@ The safe local checks are:
 
 ```bash
 bash -n \
+  /home/joel/code/lg-tv-automation/bin/lg-tv-edid \
   /home/joel/code/lg-tv-automation/bin/lg-tv-play \
-  /home/joel/code/lg-tv-automation/bin/lg-tv-ui-probe
+  /home/joel/code/lg-tv-automation/bin/lg-tv-ui-probe \
+  /home/joel/code/lg-tv-automation/scripts/install-command-links.sh \
+  /home/joel/code/lg-tv-automation/scripts/install-edid-override.sh \
+  /home/joel/code/lg-tv-automation/scripts/remove-edid-override.sh \
+  /home/joel/code/lg-tv-automation/scripts/verify-edid-override.sh
 
 /home/joel/code/lg-tv-automation/.venv/bin/pytest -q
+lg-tv-edid verify --no-kscreen
 ```
 
 The live hardware checks that matter are:
