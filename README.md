@@ -29,7 +29,7 @@ This repo therefore automates:
 - Fedora display HDR/WCG changes
 - TV input relabeling between desktop and movie-friendly states
 - TV picture mode switching between `expert1`, `filmMaker`, and `hdrFilmMaker`
-- `truMotionMode=cinemaClear` for movie mode
+- `truMotionMode=off` for movie mode
 - hidden HDMI/Game Optimizer flags:
   - `4:4:4 Pass Through`
   - Game Optimizer master
@@ -83,6 +83,12 @@ logic around `kscreen-doctor -j` is important: the display stack can briefly
 drop the output during HDR transitions, and immediate failure would strand the
 desktop in the wrong state.
 
+Some deployments intentionally remove HDMI Forum VRR/ALLM from the TV EDID to
+avoid LG HDR 119.88 Hz low-latency behavior. In that state KScreen reports
+`Vrr: incapable` and omits a configurable `vrrPolicy`. The display controller
+treats that as satisfying movie-mode VRR-off requirements and skips desktop VRR
+policy restore, while still applying HDR/WCG normally.
+
 That behavior is not only a restore-risk for this tool. On this KDE Wayland +
 NVIDIA + single-HDMI stack, some already-running GUI apps can survive a display
 topology glitch in a stale state afterward. The repo keeps the display logic
@@ -126,6 +132,7 @@ Movie mode does the following:
 
 - leave refresh rate alone by default
 - optionally force `4K60` if `--force-60hz` is explicitly requested
+- optionally match the source frame rate if `--match-refresh` is explicitly requested
 - enable Fedora HDR/WCG for HDR sources and disable them for SDR sources
 - keep the TV on `HDMI 1`
 - relabel the input to a normal HDMI label instead of `PC`
@@ -133,11 +140,14 @@ Movie mode does the following:
 - set the TV picture mode to:
   - `filmMaker` for SDR
   - `hdrFilmMaker` for HDR
-- set `truMotionMode=cinemaClear`
+- set `truMotionMode=off`
+- re-apply the HDMI/Game Optimizer state after picture-mode writes, because HDR
+  picture-mode transitions can resurrect latency-related TV state
 
-When `lg-tv-play` launches actual playback rather than `--movie-mode`, it also
-tries to match the display refresh to the source frame rate unless
-`--force-60hz` or the source metadata says to leave the desktop refresh alone.
+When `lg-tv-play` launches actual playback rather than `--movie-mode`, it
+leaves the desktop refresh alone by default. Use `--match-refresh` to
+temporarily match the display refresh to the source frame rate, or
+`--force-60hz` to force the output to 4K60.
 
 ### Desktop mode
 
@@ -149,6 +159,10 @@ Desktop mode restores the preferred desktop presentation:
 - Game Optimizer enabled
 - `VRR & G-Sync` enabled
 - `ALLM` enabled
+
+If the active EDID does not expose VRR capability, Fedora-side VRR policy is not
+restored because there is no configurable KScreen policy. The TV-side desktop
+profile is still written.
 
 ### Cleanup contract
 
@@ -203,6 +217,7 @@ lg-tv-play --hdr -- /path/to/movie.mkv
 lg-tv-play --sdr -- /path/to/movie.mkv
 lg-tv-play --restore-saved-state -- /path/to/movie.mkv
 lg-tv-play --force-60hz -- /path/to/movie.mkv
+lg-tv-play --match-refresh -- /path/to/movie.mkv
 lg-tv-play --no-tv -- /path/to/movie.mkv
 lg-tv-play --no-tv-ui -- /path/to/movie.mkv
 lg-tv-play --no-display -- /path/to/movie.mkv

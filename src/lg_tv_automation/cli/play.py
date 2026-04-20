@@ -197,6 +197,14 @@ def parse_args() -> argparse.Namespace:
         help="Temporarily switch the Fedora output to 4K60 for movie mode or playback.",
     )
     parser.add_argument(
+        "--match-refresh",
+        action="store_true",
+        help=(
+            "Temporarily match the Fedora output refresh to the source frame rate. "
+            "Default is to leave the desktop refresh unchanged."
+        ),
+    )
+    parser.add_argument(
         "--restore-saved-state",
         action="store_true",
         help="After playback, restore the exact pre-playback state instead of the configured desktop preset.",
@@ -413,6 +421,8 @@ async def async_main() -> int:
                     log("Refresh decision: 60.000 Hz (--force-60hz)")
                 elif args.movie_mode:
                     log("Refresh decision: unchanged (manual movie preset leaves refresh alone by default)")
+                elif not getattr(args, "match_refresh", False):
+                    log("Refresh decision: unchanged (--match-refresh not set)")
                 else:
                     target_refresh, refresh_reason = choose_display_refresh_rate(mpv_args)
                     if target_refresh is not None:

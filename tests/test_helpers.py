@@ -184,7 +184,12 @@ class HelperTests(unittest.TestCase):
             patch("lg_tv_automation.display.run_command") as run_command,
             patch.object(controller, "_wait_for_state", return_value=True) as wait_for_state,
         ):
-            controller.apply_movie_state(enable_hdr=True, force_60hz=False, target_refresh=None, dry_run=False)
+            controller.apply_movie_state(
+                enable_hdr=True,
+                force_60hz=False,
+                target_refresh=None,
+                dry_run=False,
+            )
 
         run_command.assert_called_once_with(
             [
@@ -195,6 +200,38 @@ class HelperTests(unittest.TestCase):
             ]
         )
         wait_for_state.assert_called_once_with(None, True, True, 0)
+
+    def test_apply_movie_state_accepts_vrr_incapable_sink(self) -> None:
+        controller = DisplayController("HDMI-A-1")
+        output = {
+            "name": "HDMI-A-1",
+            "currentModeId": "10",
+            "hdr": False,
+            "wcg": False,
+            "vrrPolicy": None,
+            "modes": [],
+        }
+
+        with (
+            patch("lg_tv_automation.display.load_display_output", return_value=output),
+            patch("lg_tv_automation.display.run_command") as run_command,
+            patch.object(controller, "_wait_for_state", return_value=True) as wait_for_state,
+        ):
+            controller.apply_movie_state(
+                enable_hdr=True,
+                force_60hz=False,
+                target_refresh=None,
+                dry_run=False,
+            )
+
+        run_command.assert_called_once_with(
+            [
+                "kscreen-doctor",
+                "output.HDMI-A-1.hdr.enable",
+                "output.HDMI-A-1.wcg.enable",
+            ]
+        )
+        wait_for_state.assert_called_once_with(None, True, True, None)
 
     def test_apply_movie_state_matches_source_refresh_when_requested(self) -> None:
         controller = DisplayController("HDMI-A-1")
@@ -261,6 +298,35 @@ class HelperTests(unittest.TestCase):
             ]
         )
         wait_for_state.assert_called_once_with(None, False, False, 2)
+
+    def test_apply_desktop_state_skips_vrr_policy_for_vrr_incapable_sink(self) -> None:
+        controller = DisplayController("HDMI-A-1")
+        output = {
+            "name": "HDMI-A-1",
+            "currentModeId": "10",
+            "hdr": True,
+            "wcg": True,
+            "vrrPolicy": None,
+            "modes": [
+                {"id": 10, "size": {"width": 3840, "height": 2160}, "refreshRate": 119.88},
+            ],
+        }
+
+        with (
+            patch("lg_tv_automation.display.load_display_output", return_value=output),
+            patch("lg_tv_automation.display.run_command") as run_command,
+            patch.object(controller, "_wait_for_state", return_value=True) as wait_for_state,
+        ):
+            controller.apply_desktop_state(dry_run=False)
+
+        run_command.assert_called_once_with(
+            [
+                "kscreen-doctor",
+                "output.HDMI-A-1.hdr.disable",
+                "output.HDMI-A-1.wcg.disable",
+            ]
+        )
+        wait_for_state.assert_called_once_with(None, False, False, None)
 
     def test_apply_desktop_state_falls_back_to_highest_refresh_and_automatic_vrr(self) -> None:
         controller = DisplayController("HDMI-A-1")
@@ -418,6 +484,53 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             await controller.apply_profile(profile, dry_run=False)
 
         self.assertTrue(any("truMotion change failed" in failure for failure in controller.failures))
+
+    async def test_apply_profile_reapplies_hdmi_state_after_picture_writes(self) -> None:
+        controller = TvController("192.168.1.134", "HDMI_1")
+        controller.client = SimpleNamespace(
+            set_picture_settings=AsyncMock(),
+        )
+        events: list[str] = []
+
+        async def apply_hidden_state(_state: HdmiFeatureState) -> None:
+            events.append("hdmi")
+
+        async def set_picture_mode(_picture_mode: str) -> None:
+            events.append("picture")
+
+        async def request_with_timeout(awaitable, description, *, timeout=5.0):
+            _ = timeout
+            if "truMotionMode" in description:
+                events.append("trumotion")
+            return await awaitable
+
+        controller._ensure_input_active = AsyncMock()
+        controller._get_input_info = AsyncMock(return_value={"label": "HDMI 1", "icon": "HDMI_1.png"})
+        controller._apply_hidden_hdmi_state = AsyncMock(side_effect=apply_hidden_state)
+        controller._set_picture_mode = AsyncMock(side_effect=set_picture_mode)
+
+        profile = TvProfile(
+            label="HDMI 1",
+            icon="HDMI_1",
+            picture_mode="hdrFilmMaker",
+            tru_motion="off",
+            hdmi_features=HdmiFeatureState(
+                passthrough_444=False,
+                game_optimizer_master=False,
+                vrr=False,
+                allm=False,
+            ),
+        )
+
+        with (
+            patch.object(controller, "_request_with_timeout", side_effect=request_with_timeout),
+            patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()),
+        ):
+            await controller.apply_profile(profile, dry_run=False)
+
+        self.assertEqual(events, ["hdmi", "picture", "trumotion", "hdmi"])
+        self.assertEqual(controller._apply_hidden_hdmi_state.await_count, 2)
+        self.assertFalse(controller.failures)
 
     async def test_status_falls_back_to_ui_error_when_ui_capture_times_out(self) -> None:
         controller = TvController("192.168.1.134", "HDMI_1")

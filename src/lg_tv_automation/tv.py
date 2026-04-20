@@ -520,9 +520,11 @@ class TvController:
         else:
             log(f"{self.input_id} label/icon already at {profile.label}/{profile.icon}.")
 
+        hdmi_features_applied = False
         if profile.hdmi_features is not None:
             try:
                 await self._apply_hidden_hdmi_state(profile.hdmi_features)
+                hdmi_features_applied = True
             except Exception as err:
                 message = f"Direct HDMI/Game Optimizer state change failed: {err}"
                 self.failures.append(message)
@@ -562,6 +564,15 @@ class TvController:
                     message = f"TV truMotion change failed: {retry_err}"
                     self.failures.append(message)
                     log(message)
+
+        if profile.hdmi_features is not None and hdmi_features_applied:
+            try:
+                log("Reapplying HDMI/Game Optimizer state after picture-mode writes.")
+                await self._apply_hidden_hdmi_state(profile.hdmi_features)
+            except Exception as err:
+                message = f"Final HDMI/Game Optimizer state change failed: {err}"
+                self.failures.append(message)
+                log(message)
 
     async def restore(self, *, dry_run: bool) -> None:
         """Restore the exact TV state captured before playback."""

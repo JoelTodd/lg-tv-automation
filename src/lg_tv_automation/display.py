@@ -19,6 +19,12 @@ VRR_POLICY_TO_NAME = {
 }
 
 
+def has_vrr_policy(output: dict[str, Any]) -> bool:
+    """Return whether KScreen exposes a configurable VRR policy."""
+
+    return output.get("vrrPolicy") in VRR_POLICY_TO_NAME
+
+
 def load_display_output(name: str, retries: int = 20, interval: float = 0.25) -> dict[str, Any]:
     """Load one output entry from ``kscreen-doctor -j``.
 
@@ -152,7 +158,12 @@ class DisplayController:
                         f"No {width}x{height}@{target_refresh_hz:.3f} mode found; leaving refresh unchanged."
                     )
 
-        actions.append(f"output.{self.output_name}.vrrpolicy.never")
+        expected_vrr_policy = None
+        if has_vrr_policy(output):
+            actions.append(f"output.{self.output_name}.vrrpolicy.never")
+            expected_vrr_policy = 0
+        else:
+            log("VRR policy is unavailable; treating the sink as VRR-incapable.")
         actions.append(f"output.{self.output_name}.hdr.{'enable' if enable_hdr else 'disable'}")
         actions.append(f"output.{self.output_name}.wcg.{'enable' if enable_hdr else 'disable'}")
 
@@ -165,7 +176,7 @@ class DisplayController:
 
         run_command(["kscreen-doctor", *actions])
         expected_mode_id = target_mode_id if target_mode_id else None
-        if not self._wait_for_state(expected_mode_id, enable_hdr, enable_hdr, 0):
+        if not self._wait_for_state(expected_mode_id, enable_hdr, enable_hdr, expected_vrr_policy):
             raise RuntimeError("Display state did not reach the requested movie preset.")
 
     def apply_desktop_state(self, *, dry_run: bool) -> None:
@@ -194,8 +205,11 @@ class DisplayController:
                     target_mode_id = fallback_mode_id
                     actions.append(f"output.{self.output_name}.mode.{target_mode_id}")
 
-        if target_vrr_policy in VRR_POLICY_TO_NAME:
+        if target_vrr_policy in VRR_POLICY_TO_NAME and has_vrr_policy(output):
             actions.append(f"output.{self.output_name}.vrrpolicy.{VRR_POLICY_TO_NAME[target_vrr_policy]}")
+        elif target_vrr_policy in VRR_POLICY_TO_NAME:
+            log("VRR policy is unavailable; skipping desktop VRR policy restore.")
+            target_vrr_policy = None
 
         actions.append(f"output.{self.output_name}.hdr.disable")
         actions.append(f"output.{self.output_name}.wcg.disable")
@@ -220,8 +234,13 @@ class DisplayController:
             f"output.{self.output_name}.hdr.{'enable' if self.saved_state.hdr else 'disable'}",
             f"output.{self.output_name}.wcg.{'enable' if self.saved_state.wcg else 'disable'}",
         ]
-        if self.saved_state.vrr_policy in VRR_POLICY_TO_NAME:
+        output = load_display_output(self.output_name)
+        expected_vrr_policy = self.saved_state.vrr_policy
+        if self.saved_state.vrr_policy in VRR_POLICY_TO_NAME and has_vrr_policy(output):
             actions.insert(1, f"output.{self.output_name}.vrrpolicy.{VRR_POLICY_TO_NAME[self.saved_state.vrr_policy]}")
+        elif self.saved_state.vrr_policy in VRR_POLICY_TO_NAME:
+            log("VRR policy is unavailable; skipping exact VRR policy restore.")
+            expected_vrr_policy = None
 
         log(f"Restoring display state: {' '.join(actions)}")
         if dry_run:
@@ -232,6 +251,6 @@ class DisplayController:
             self.saved_state.mode_id,
             self.saved_state.hdr,
             self.saved_state.wcg,
-            self.saved_state.vrr_policy,
+            expected_vrr_policy,
         ):
             raise RuntimeError("Display state did not restore to the saved state.")
