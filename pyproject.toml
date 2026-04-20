@@ -17,6 +17,7 @@ dependencies = [
 dev = ["pytest"]
 
 [project.scripts]
+lg-tv-edid = "lg_tv_automation.cli.edid:main"
 lg-tv-play = "lg_tv_automation.cli.play:main"
 lg-tv-ui-probe = "lg_tv_automation.cli.ui_probe:main"
 
@@ -25,3 +26,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"lg_tv_automation.assets.edid" = ["*.bin"]

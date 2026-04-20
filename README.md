@@ -8,6 +8,7 @@ The repo exists to make the setup understandable and maintainable, not just
 functional. The command surface stays intentionally small:
 
 - `lg-tv-play`: apply movie mode, apply desktop mode, print status, or wrap `mpv`
+- `lg-tv-edid`: manage and verify the local HDR 119 Hz EDID override
 - `lg-tv-ui-probe`: exploratory screenshot-driven UI automation tool
 
 When a local directory is passed to `lg-tv-play`, it resolves that directory to
@@ -30,6 +31,7 @@ This repo therefore automates:
 - TV input relabeling between desktop and movie-friendly states
 - TV picture mode switching between `expert1`, `filmMaker`, and `hdrFilmMaker`
 - `truMotionMode=off` for movie mode
+- local EDID override management for the HDR 119 Hz ALLM/VRR workaround
 - hidden HDMI/Game Optimizer flags:
   - `4:4:4 Pass Through`
   - Game Optimizer master
@@ -43,13 +45,25 @@ lg-tv-automation/
 ├── README.md
 ├── pyproject.toml
 ├── bin/
+│   ├── lg-tv-edid
 │   ├── lg-tv-play
 │   └── lg-tv-ui-probe
 ├── docs/
+│   ├── hdr119-allm-vrr-edid-override.md
 │   ├── handoff-hdr-vrr-allm-investigation-2026-04-09.md
-│   └── handoff-kde-discover-output-state.md
+│   ├── handoff-kde-discover-output-state.md
+│   └── troubleshooting-artifacts.md
+├── scripts/
+│   ├── install-edid-override.sh
+│   ├── remove-edid-override.sh
+│   └── verify-edid-override.sh
 ├── src/lg_tv_automation/
+│   ├── assets/
+│   │   └── edid/
+│   │       ├── lg-tv-sscr2-no-allm-vrr.bin
+│   │       └── lg-tv-sscr2-original.bin
 │   ├── cli/
+│   │   ├── edid.py
 │   │   ├── play.py
 │   │   └── ui_probe.py
 │   ├── constants.py
@@ -76,7 +90,16 @@ lg-tv-automation/
 - whether playback cleanup should restore the exact captured state or the
   configured desktop preset
 
-### 2. Fedora display control
+### 2. EDID override management
+
+`src/lg_tv_automation/cli/edid.py` owns the stable EDID override workflow for
+the LG HDR 119.88 Hz ALLM/VRR issue. It can install, remove, check status, and
+verify the packaged patched EDID.
+
+The packaged override keeps HDR/WCG data intact and removes only HDMI Forum
+ALLM/VRR advertising. See `docs/hdr119-allm-vrr-edid-override.md`.
+
+### 3. Fedora display control
 
 `src/lg_tv_automation/display.py` owns `kscreen-doctor` interaction. The retry
 logic around `kscreen-doctor -j` is important: the display stack can briefly
@@ -95,7 +118,7 @@ topology glitch in a stale state afterward. The repo keeps the display logic
 small and explicit, and documents the broader symptom in
 `docs/handoff-kde-discover-output-state.md`.
 
-### 3. TV direct control
+### 4. TV direct control
 
 `src/lg_tv_automation/tv.py` owns the fast path:
 
@@ -112,7 +135,7 @@ The hidden-setting route uses a deliberate workaround:
 
 This is significantly faster and more reliable than walking the TV UI.
 
-### 4. TV UI exploration and state probes
+### 5. TV UI exploration and state probes
 
 `src/lg_tv_automation/tv_ui.py` and `src/lg_tv_automation/cli/ui_probe.py` are
 kept on purpose even though direct hidden writes are the preferred playback
@@ -189,6 +212,30 @@ lg-tv-play --status --no-tv-ui
 keys.
 
 `--status` does not run concurrently with an active playback or preset session.
+
+EDID override status and validation:
+
+```bash
+lg-tv-edid status
+lg-tv-edid verify
+```
+
+From the checkout, `bin/lg-tv-edid` is the stable wrapper if `.venv/bin` is not
+on `PATH`.
+
+EDID override install and recovery:
+
+```bash
+sudo lg-tv-edid install
+sudo systemctl reboot
+
+sudo lg-tv-edid remove
+sudo systemctl reboot
+```
+
+The `scripts/install-edid-override.sh`, `scripts/remove-edid-override.sh`, and
+`scripts/verify-edid-override.sh` wrappers call the same CLI and are safe to
+use with `sudo` from the checkout.
 
 Manual movie preset:
 

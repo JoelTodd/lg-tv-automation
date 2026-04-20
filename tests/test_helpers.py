@@ -17,6 +17,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from lg_tv_automation.cli import edid as edid_cli
 from lg_tv_automation.cli.play import append_debug_event, async_main, print_status, run_cleanup_step
 from lg_tv_automation.constants import expected_input_app_id
 from lg_tv_automation.display import DisplayController, select_mode_id
@@ -37,6 +38,68 @@ from lg_tv_automation.tv_ui import LgTvUiAutomation
 class HelperTests(unittest.TestCase):
     def test_expected_input_app_id(self) -> None:
         self.assertEqual(expected_input_app_id("HDMI_1"), "com.webos.app.hdmi1")
+
+    def test_edid_packaged_asset_matches_expected_checksum(self) -> None:
+        data = edid_cli.package_edid_bytes()
+
+        self.assertEqual(edid_cli.sha256_bytes(data), edid_cli.PATCHED_SHA256)
+
+    def test_edid_status_verifies_active_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            firmware_root = root / "firmware"
+            installed = firmware_root / edid_cli.firmware_relative_path()
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(edid_cli.package_edid_bytes())
+
+            proc_cmdline = root / "cmdline"
+            proc_cmdline.write_text(f"quiet {edid_cli.kernel_arg()} rhgb", encoding="utf-8")
+
+            sysfs_drm = root / "drm"
+            live = sysfs_drm / "card1-HDMI-A-1"
+            live.mkdir(parents=True)
+            (live / "edid").write_bytes(edid_cli.package_edid_bytes())
+
+            with patch(
+                "lg_tv_automation.cli.edid.kscreen_output",
+                return_value={"currentModeId": "14", "hdr": True, "wcg": True, "vrrPolicy": None},
+            ):
+                status = edid_cli.collect_status(
+                    firmware_root=firmware_root,
+                    proc_cmdline=proc_cmdline,
+                    sysfs_drm=sysfs_drm,
+                )
+
+        self.assertEqual(status["installed"]["sha256"], edid_cli.PATCHED_SHA256)
+        self.assertEqual(status["runtime"]["live_edid_sha256"], edid_cli.PATCHED_SHA256)
+        self.assertTrue(status["runtime"]["cmdline_has_kernel_arg"])
+        self.assertEqual(status["kscreen"]["vrrPolicy"], None)
+        self.assertEqual(edid_cli.verification_failures(status), [])
+
+    def test_edid_status_reports_live_edid_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            firmware_root = root / "firmware"
+            installed = firmware_root / edid_cli.firmware_relative_path()
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(edid_cli.package_edid_bytes())
+
+            proc_cmdline = root / "cmdline"
+            proc_cmdline.write_text(edid_cli.kernel_arg(), encoding="utf-8")
+
+            sysfs_drm = root / "drm"
+            live = sysfs_drm / "card1-HDMI-A-1"
+            live.mkdir(parents=True)
+            (live / "edid").write_bytes(edid_cli.package_edid_bytes(edid_cli.ORIGINAL_EDID))
+
+            status = edid_cli.collect_status(
+                firmware_root=firmware_root,
+                proc_cmdline=proc_cmdline,
+                sysfs_drm=sysfs_drm,
+                include_kscreen=False,
+            )
+
+        self.assertIn("live DRM EDID does not match", "\n".join(edid_cli.verification_failures(status)))
 
     def test_normalize_mpv_args_strips_leading_separator(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
