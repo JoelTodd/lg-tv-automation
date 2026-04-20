@@ -40,7 +40,8 @@ This repo therefore automates:
 - Fedora display HDR/WCG changes
 - TV input relabeling between desktop and movie-friendly states
 - TV picture mode switching between `expert1`, `filmMaker`, and `hdrFilmMaker`
-- `truMotionMode=off` for movie mode
+- no default `truMotionMode` write for movie mode; FILMMAKER modes manage it
+  after ALLM is off
 - local EDID override management for the HDR 119.88 Hz ALLM/VRR workaround
 - hidden HDMI/Game Optimizer flags:
   - `4:4:4 Pass Through`
@@ -174,7 +175,8 @@ Movie mode does the following:
 - set the TV picture mode to:
   - `filmMaker` for SDR
   - `hdrFilmMaker` for HDR
-- set `truMotionMode=off`
+- do not write `truMotionMode` by default; `filmMaker` and `hdrFilmMaker`
+  manage TruMotion once ALLM is off
 - re-apply the HDMI/Game Optimizer state after picture-mode writes, because HDR
   picture-mode transitions can resurrect latency-related TV state
 

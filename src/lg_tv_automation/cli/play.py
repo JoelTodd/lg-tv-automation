@@ -254,7 +254,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tru-motion",
         default=DEFAULT_TRUMOTION,
-        help=f"TV TruMotion mode for playback. Default: {DEFAULT_TRUMOTION}",
+        help=(
+            "Optional TV TruMotion override for playback. Default: do not write; "
+            "FILMMAKER modes manage TruMotion once ALLM is off."
+        ),
     )
     parser.add_argument(
         "--desktop-label",

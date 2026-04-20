@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lg_tv_automation.cli import edid as edid_cli
 from lg_tv_automation.cli.play import append_debug_event, async_main, print_status, run_cleanup_step
-from lg_tv_automation.constants import expected_input_app_id
+from lg_tv_automation.constants import DEFAULT_TRUMOTION, expected_input_app_id
 from lg_tv_automation.display import DisplayController, select_mode_id
 from lg_tv_automation.media import (
     choose_display_refresh_rate,
@@ -38,6 +38,9 @@ from lg_tv_automation.tv_ui import LgTvUiAutomation
 class HelperTests(unittest.TestCase):
     def test_expected_input_app_id(self) -> None:
         self.assertEqual(expected_input_app_id("HDMI_1"), "com.webos.app.hdmi1")
+
+    def test_default_trumotion_for_video_playback_is_not_written(self) -> None:
+        self.assertIsNone(DEFAULT_TRUMOTION)
 
     def test_edid_packaged_asset_matches_expected_checksum(self) -> None:
         data = edid_cli.package_edid_bytes()
@@ -576,7 +579,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             label="HDMI 1",
             icon="HDMI_1",
             picture_mode="hdrFilmMaker",
-            tru_motion="off",
+            tru_motion="on",
             hdmi_features=HdmiFeatureState(
                 passthrough_444=False,
                 game_optimizer_master=False,

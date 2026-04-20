@@ -18,7 +18,7 @@ def build_movie_profile(
     movie_icon: str,
     sdr_picture_mode: str,
     hdr_picture_mode: str,
-    tru_motion: str,
+    tru_motion: str | None,
 ) -> TvProfile:
     """Build the movie preset.
 
