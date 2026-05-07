@@ -92,9 +92,8 @@ class LgTvUiAutomation:
         return self._saturated_pixel_count(image, self.ROW_SWITCH_BOX, 0.72, 0.92) > 150
 
     def detect_hdmi_settings_page(self, image: Image.Image) -> bool:
-        quick_media_green = self._saturated_pixel_count(image, self.HDMI_QMS_SWITCH_BOX, 0.25, 0.45)
         cec_green = self._saturated_pixel_count(image, self.HDMI_CEC_SWITCH_BOX, 0.25, 0.45)
-        return quick_media_green > 150 and cec_green > 150
+        return cec_green > 150
 
     def detect_game_optimizer_page(self, image: Image.Image) -> bool:
         return self._saturated_pixel_count(image, self.GAME_OPTIMIZER_HEADER_BOX, 0.72, 0.92) > 5000
@@ -124,29 +123,24 @@ class LgTvUiAutomation:
 
     async def _navigate_hdmi_settings(self) -> Image.Image:
         await self.ensure_input_active()
+        await self._press("EXIT", 1.0)
+        await self.ensure_input_active()
         await self.client.launch_app_with_params("com.palm.app.settings", {"target": "PictureMode"})
-        await self._sleep(1.4)
+        await self._sleep(3.0)
 
-        await self._press_many("LEFT", 4, 0.45)
-        await self._capture_image()
-        await self._press("DOWN", 0.35)
-        await self._press("DOWN", 0.35)
-        await self._capture_image()
+        await self._press_many("LEFT", 4, 0.7)
+        await self._press_many("DOWN", 2, 0.7)
 
-        await self._press("RIGHT", 0.6)
-        await self._capture_image()
+        await self._press("RIGHT", 1.0)
 
-        await self._press_many("DOWN", 8, 0.35)
-        await self._capture_image()
+        await self._press_many("DOWN", 8, 0.7)
 
-        await self._press("RIGHT", 0.9)
-        await self._capture_image()
+        await self._press("RIGHT", 2.5)
 
-        await self._press("DOWN", 0.5)
-        await self._capture_image()
+        await self._press("DOWN", 1.0)
 
-        await self._press("RIGHT", 0.9)
-        await self._sleep(0.9)
+        await self._press("RIGHT", 1.0)
+        await self._sleep(1.2)
         return await self._capture_image()
 
     async def open_hdmi_settings(self) -> Image.Image:

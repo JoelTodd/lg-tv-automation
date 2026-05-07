@@ -234,6 +234,22 @@ class HelperTests(unittest.TestCase):
         ui._saturated_pixel_count = lambda *_args, **_kwargs: 4000
         self.assertFalse(ui.detect_game_optimizer_page(None))
 
+    def test_detect_hdmi_settings_page_allows_movie_mode_toggles_off(self) -> None:
+        ui = object.__new__(LgTvUiAutomation)
+
+        def fake_count(_image, box, _hue_min, _hue_max):
+            if box == LgTvUiAutomation.HDMI_444_SWITCH_BOX:
+                return 0
+            if box == LgTvUiAutomation.HDMI_QMS_SWITCH_BOX:
+                return 0
+            if box == LgTvUiAutomation.HDMI_CEC_SWITCH_BOX:
+                return 180
+            return 0
+
+        ui._saturated_pixel_count = fake_count
+
+        self.assertTrue(ui.detect_hdmi_settings_page(None))
+
     def test_apply_movie_state_forces_vrr_policy_never(self) -> None:
         controller = DisplayController("HDMI-A-1")
         output = {
@@ -682,6 +698,41 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((Path(tmpdir) / "hdmi-settings-final.png").exists())
 
         self.assertEqual(result, {"passthrough_444": True})
+
+    async def test_navigate_hdmi_settings_uses_verified_menu_path(self) -> None:
+        client = SimpleNamespace(launch_app_with_params=AsyncMock())
+        ui = LgTvUiAutomation(client, "com.webos.app.hdmi1")
+        ui.ensure_input_active = AsyncMock()
+        ui._sleep = AsyncMock()
+        ui._capture_image = AsyncMock(return_value="image")
+        ui._press = AsyncMock()
+        ui._press_many = AsyncMock()
+
+        result = await ui._navigate_hdmi_settings()
+
+        self.assertEqual(result, "image")
+        client.launch_app_with_params.assert_awaited_once_with(
+            "com.palm.app.settings",
+            {"target": "PictureMode"},
+        )
+        self.assertEqual(
+            ui._press_many.await_args_list,
+            [
+                unittest.mock.call("LEFT", 4, 0.7),
+                unittest.mock.call("DOWN", 2, 0.7),
+                unittest.mock.call("DOWN", 8, 0.7),
+            ],
+        )
+        self.assertEqual(
+            ui._press.await_args_list,
+            [
+                unittest.mock.call("EXIT", 1.0),
+                unittest.mock.call("RIGHT", 1.0),
+                unittest.mock.call("RIGHT", 2.5),
+                unittest.mock.call("DOWN", 1.0),
+                unittest.mock.call("RIGHT", 1.0),
+            ],
+        )
 
     async def test_capture_raises_when_exact_ui_state_is_required(self) -> None:
         controller = TvController("192.168.1.134", "HDMI_1")
