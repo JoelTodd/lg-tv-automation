@@ -39,6 +39,37 @@ current desired state is full HDR/WCG at the normal desktop refresh
 still exists as an explicit diagnostic or compatibility switch, but it is not
 the primary mitigation.
 
+## Input Classification Requirement
+
+As of the May 7, 2026 recheck, the EDID override and hidden ALLM off-writes are
+not sufficient by themselves if HDMI 1 remains classified as a generic HDMI/PC
+source. The visible label/icon may already say `HDMI 1`, but the LG can still
+keep the active Game Optimizer dashboard in `Low Latency ON`.
+
+Manual validation showed this sequence:
+
+- `lg-tv-play --movie-mode --hdr --no-tv-ui` with the old `HDMI 1` /
+  `HDMI_1` movie input profile left the Game Optimizer dashboard at
+  `Low Latency ON`.
+- Reapplying hidden `enableALLM`, `inputOptimization`, `enableQuickGame`, and
+  Game Optimizer master off-writes did not clear the dashboard state.
+- `lg-tv-play --match-refresh` changed the dashboard to `24 FPS`, but
+  `Low Latency` still remained `ON` on this firmware/state.
+- Forcing HDMI 1 to the non-PC `Blu-ray Player` / `bluray` input profile made
+  the same dashboard report `Low Latency OFF` while preserving HDR/WCG,
+  `hdrFilmMaker`, and `4:4:4 Pass Through` off.
+
+For this reason, movie mode now defaults to:
+
+```text
+DEFAULT_MOVIE_LABEL = "Blu-ray Player"
+DEFAULT_MOVIE_ICON = "bluray"
+```
+
+Do not "simplify" movie mode back to `HDMI 1` / `HDMI_1` just because the
+visible TV input label already looks neutral. On this setup, `set_device_info`
+with the Blu-ray icon is part of clearing the TV's low-latency path.
+
 ## Commands
 
 Check status:
@@ -97,6 +128,9 @@ After install and reboot:
   - HDR enabled during movie mode
   - WCG enabled during movie mode
   - VRR incapable / no configurable `vrrPolicy`
+- HDMI 1 input metadata reports:
+  - label `Blu-ray Player` during movie mode
+  - icon `bluray.png` during movie mode
 - LG Game Optimizer dashboard reports:
   - `120 FPS`
   - `VRR OFF`
@@ -119,6 +153,21 @@ Then capture the Game Optimizer dashboard with:
 ```bash
 lg-tv-ui-probe --out-dir /tmp/lg-tv-dashboard --launch-app com.webos.app.gameoptimizer --delay 3.0
 ```
+
+For a manual end-to-end validation of the current target file, run:
+
+```bash
+lg-tv-play "/home/joel/Downloads/For.All.Mankind.S01.HDR.2160p.WEB.h265-PETFRiFiED[rartv]/For.All.Mankind.S01E10.HDR.2160p.WEB.h265-PETFRiFiED.mkv"
+```
+
+While playback is active, capture:
+
+```bash
+lg-tv-ui-probe --out-dir /tmp/lg-tv-dashboard-playback --launch-app com.webos.app.gameoptimizer --delay 3.0 --status
+```
+
+The dashboard should show `VRR OFF` and `Low Latency OFF`. The saved
+`status.json` should show HDMI 1 as `Blu-ray Player` with `bluray.png`.
 
 The decisive historical validation evidence lives outside this repo in:
 

@@ -170,7 +170,7 @@ Movie mode does the following:
 - optionally match the source frame rate if `--match-refresh` is explicitly requested
 - enable Fedora HDR/WCG for HDR sources and disable them for SDR sources
 - keep the TV on `HDMI 1`
-- relabel the input to a normal HDMI label instead of `PC`
+- relabel the input as `Blu-ray Player` instead of a generic HDMI/PC device
 - disable `4:4:4 Pass Through`, Game Optimizer, `VRR`, and `ALLM`
 - set the TV picture mode to:
   - `filmMaker` for SDR
@@ -179,6 +179,13 @@ Movie mode does the following:
   manage TruMotion once ALLM is off
 - re-apply the HDMI/Game Optimizer state after picture-mode writes, because HDR
   picture-mode transitions can resurrect latency-related TV state
+
+The `Blu-ray Player` / `bluray` relabel is intentionally part of movie mode,
+not cosmetic naming. On this LG firmware/state, leaving HDMI 1 as the generic
+`HDMI 1` / `HDMI_1` profile can keep the Game Optimizer dashboard at
+`Low Latency ON` even after the hidden ALLM off-writes and EDID override are
+active. The Blu-ray input profile is the observed non-PC classification that
+clears the active low-latency path while preserving HDR/WCG and Filmmaker mode.
 
 When `lg-tv-play` launches actual playback rather than `--movie-mode`, it
 leaves the desktop refresh alone by default. Use `--match-refresh` to

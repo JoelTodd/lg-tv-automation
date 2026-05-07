@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lg_tv_automation.cli import edid as edid_cli
 from lg_tv_automation.cli.play import append_debug_event, async_main, print_status, run_cleanup_step
-from lg_tv_automation.constants import DEFAULT_TRUMOTION, expected_input_app_id
+from lg_tv_automation.constants import DEFAULT_MOVIE_ICON, DEFAULT_MOVIE_LABEL, DEFAULT_TRUMOTION, expected_input_app_id
 from lg_tv_automation.display import DisplayController, select_mode_id
 from lg_tv_automation.media import (
     choose_display_refresh_rate,
@@ -41,6 +41,10 @@ class HelperTests(unittest.TestCase):
 
     def test_default_trumotion_for_video_playback_is_not_written(self) -> None:
         self.assertIsNone(DEFAULT_TRUMOTION)
+
+    def test_default_movie_input_profile_forces_non_pc_classification(self) -> None:
+        self.assertEqual(DEFAULT_MOVIE_LABEL, "Blu-ray Player")
+        self.assertEqual(DEFAULT_MOVIE_ICON, "bluray")
 
     def test_edid_packaged_asset_matches_expected_checksum(self) -> None:
         data = edid_cli.package_edid_bytes()
