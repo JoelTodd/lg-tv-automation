@@ -254,8 +254,8 @@ def parse_args() -> argparse.Namespace:
         "--tru-motion",
         default=DEFAULT_TRUMOTION,
         help=(
-            "Optional TV TruMotion override for playback. Default: do not write; "
-            "FILMMAKER modes manage TruMotion once ALLM is off."
+            "TV TruMotion mode for playback. "
+            f"Default: {DEFAULT_TRUMOTION} (Cinematic Movement)."
         ),
     )
     parser.add_argument(

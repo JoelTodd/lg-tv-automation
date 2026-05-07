@@ -32,6 +32,7 @@ from lg_tv_automation.media import (
     resolve_probe_path,
 )
 from lg_tv_automation.models import DisplaySnapshot, HdmiFeatureState, TvProfile
+from lg_tv_automation.profiles import build_movie_profile
 from lg_tv_automation.tv import TvController
 from lg_tv_automation.tv_ui import LgTvUiAutomation
 
@@ -40,8 +41,31 @@ class HelperTests(unittest.TestCase):
     def test_expected_input_app_id(self) -> None:
         self.assertEqual(expected_input_app_id("HDMI_1"), "com.webos.app.hdmi1")
 
-    def test_default_trumotion_for_video_playback_is_not_written(self) -> None:
-        self.assertIsNone(DEFAULT_TRUMOTION)
+    def test_default_trumotion_for_video_playback_uses_cinematic_movement(self) -> None:
+        self.assertEqual(DEFAULT_TRUMOTION, "cinematicMovement")
+
+    def test_movie_profiles_apply_cinematic_movement_by_default(self) -> None:
+        sdr_profile = build_movie_profile(
+            want_hdr=False,
+            movie_label=DEFAULT_MOVIE_LABEL,
+            movie_icon=DEFAULT_MOVIE_ICON,
+            sdr_picture_mode="filmMaker",
+            hdr_picture_mode="hdrFilmMaker",
+            tru_motion=DEFAULT_TRUMOTION,
+        )
+        hdr_profile = build_movie_profile(
+            want_hdr=True,
+            movie_label=DEFAULT_MOVIE_LABEL,
+            movie_icon=DEFAULT_MOVIE_ICON,
+            sdr_picture_mode="filmMaker",
+            hdr_picture_mode="hdrFilmMaker",
+            tru_motion=DEFAULT_TRUMOTION,
+        )
+
+        self.assertEqual(sdr_profile.picture_mode, "filmMaker")
+        self.assertEqual(sdr_profile.tru_motion, "cinematicMovement")
+        self.assertEqual(hdr_profile.picture_mode, "hdrFilmMaker")
+        self.assertEqual(hdr_profile.tru_motion, "cinematicMovement")
 
     def test_default_movie_input_profile_forces_non_pc_classification(self) -> None:
         self.assertEqual(DEFAULT_MOVIE_LABEL, "Blu-ray Player")
