@@ -157,7 +157,7 @@ lg-tv-ui-probe --out-dir /tmp/lg-tv-dashboard --launch-app com.webos.app.gameopt
 For a manual end-to-end validation of the current target file, run:
 
 ```bash
-lg-tv-play "/home/joel/Downloads/For.All.Mankind.S01.HDR.2160p.WEB.h265-PETFRiFiED[rartv]/For.All.Mankind.S01E10.HDR.2160p.WEB.h265-PETFRiFiED.mkv"
+lg-tv-play "/path/to/media/For.All.Mankind.S01.HDR.2160p.WEB.h265-PETFRiFiED[rartv]/For.All.Mankind.S01E10.HDR.2160p.WEB.h265-PETFRiFiED.mkv"
 ```
 
 While playback is active, capture:
@@ -172,7 +172,7 @@ The dashboard should show `VRR OFF` and `Low Latency OFF`. The saved
 The decisive historical validation evidence lives outside this repo in:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames/evidence/P4
+/path/to/system-troubleshooting/2026-04-16-mpv-dropped-frames/evidence/P4
 ```
 
 Use the troubleshooting artifact guide for exact screenshot/log locations:

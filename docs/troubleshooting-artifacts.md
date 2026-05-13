@@ -4,7 +4,7 @@ This repo contains the stable automation workflow. Bulky generated evidence
 stays in:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames
+/path/to/system-troubleshooting/2026-04-16-mpv-dropped-frames
 ```
 
 ## HDR 119.88 Hz EDID Evidence
@@ -12,7 +12,7 @@ stays in:
 Primary external entry point:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames/evidence/P4/README.md
+/path/to/system-troubleshooting/2026-04-16-mpv-dropped-frames/evidence/P4/README.md
 ```
 
 Key artifacts:
@@ -34,13 +34,13 @@ Key artifacts:
 Primary report for the accepted mitigation:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames/reports/report-005-hdr119-allm-vrr-edid-override.md
+/path/to/system-troubleshooting/2026-04-16-mpv-dropped-frames/reports/report-005-hdr119-allm-vrr-edid-override.md
 ```
 
 Execution timeline:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-16-mpv-dropped-frames/plans/execution-log-2026-04-16-mpv-dropped-frames.md
+/path/to/system-troubleshooting/2026-04-16-mpv-dropped-frames/plans/execution-log-2026-04-16-mpv-dropped-frames.md
 ```
 
 ## Legacy UI Evidence
@@ -49,7 +49,7 @@ April 9 LG Game Optimizer UI screenshots from the earlier automation
 investigation are preserved outside this checkout:
 
 ```text
-/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test
+/path/to/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test
 ```
 
 The historical handoff at

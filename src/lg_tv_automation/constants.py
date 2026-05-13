@@ -1,6 +1,5 @@
 """Project-wide defaults and small TV-specific helpers."""
 
-DEFAULT_TV_IP = "192.168.1.134"
 DEFAULT_TV_INPUT = "HDMI_1"
 DEFAULT_DISPLAY_OUTPUT = "HDMI-A-1"
 

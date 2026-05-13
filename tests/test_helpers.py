@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -465,7 +466,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             display_output="HDMI-A-1",
             no_tv=False,
             no_tv_ui=True,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
         )
         class FakeTvContext:
@@ -492,6 +492,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
                     "vrrPolicy": 0,
                 },
             ),
+            patch.dict(os.environ, {"LG_TV_IP": "203.0.113.10"}, clear=False),
             patch("lg_tv_automation.cli.play.TvController", return_value=fake_tv),
             contextlib.redirect_stdout(stdout),
         ):
@@ -502,8 +503,129 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["display"]["currentModeId"], "10")
         self.assertEqual(payload["tv"]["picture_mode"], "expert1")
 
+    async def test_print_status_uses_lg_tv_ip_for_tv_connection(self) -> None:
+        args = SimpleNamespace(
+            display_output="HDMI-A-1",
+            no_tv=False,
+            no_tv_ui=True,
+            tv_input="HDMI_1",
+        )
+
+        class FakeTvContext:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _tb):
+                return None
+
+            async def capture(self, include_ui_state=False):
+                _ = include_ui_state
+                return {}
+
+        with (
+            patch.dict(os.environ, {"LG_TV_IP": "203.0.113.44"}, clear=False),
+            patch(
+                "lg_tv_automation.cli.play.load_display_output",
+                return_value={
+                    "name": "HDMI-A-1",
+                    "currentModeId": "10",
+                    "hdr": False,
+                    "wcg": False,
+                    "vrrPolicy": 0,
+                },
+            ),
+            patch("lg_tv_automation.cli.play.TvController", return_value=FakeTvContext()) as tv_controller,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = await print_status(args)
+
+        self.assertEqual(result, 0)
+        tv_controller.assert_called_once_with("203.0.113.44", "HDMI_1")
+
+    async def test_async_main_fails_clearly_without_lg_tv_ip_when_tv_requested(self) -> None:
+        args = SimpleNamespace(
+            status=False,
+            movie_mode=True,
+            desktop_mode=False,
+            mpv_args=[],
+            dry_run=False,
+            no_tv=False,
+            no_tv_ui=True,
+            no_display=True,
+            force_60hz=False,
+            match_refresh=False,
+            restore_saved_state=False,
+            debug_log=None,
+            debug_cue_seconds=8.0,
+            tv_input="HDMI_1",
+            display_output="HDMI-A-1",
+            movie_label="HDMI 1",
+            movie_icon="HDMI_1",
+            sdr_picture_mode="filmMaker",
+            hdr_picture_mode="hdrFilmMaker",
+            tru_motion="cinemaClear",
+            desktop_label="HDMI 1",
+            desktop_icon="HDMI_1",
+            desktop_picture_mode="expert1",
+            hdr=False,
+            sdr=False,
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("lg_tv_automation.cli.play.parse_args", return_value=args),
+            patch("lg_tv_automation.cli.play.session_lock"),
+            patch("lg_tv_automation.cli.play.TvController") as tv_controller,
+        ):
+            result = await async_main()
+
+        self.assertEqual(result, 1)
+        tv_controller.assert_not_called()
+
+    async def test_async_main_no_tv_dry_run_does_not_require_lg_tv_ip(self) -> None:
+        args = SimpleNamespace(
+            status=False,
+            movie_mode=False,
+            desktop_mode=False,
+            mpv_args=["/tmp/movie.mkv"],
+            dry_run=True,
+            no_tv=True,
+            no_tv_ui=True,
+            no_display=True,
+            force_60hz=False,
+            match_refresh=False,
+            restore_saved_state=False,
+            debug_log=None,
+            debug_cue_seconds=8.0,
+            tv_input="HDMI_1",
+            display_output="HDMI-A-1",
+            movie_label="HDMI 1",
+            movie_icon="HDMI_1",
+            sdr_picture_mode="filmMaker",
+            hdr_picture_mode="hdrFilmMaker",
+            tru_motion="cinemaClear",
+            desktop_label="HDMI 1",
+            desktop_icon="HDMI_1",
+            desktop_picture_mode="expert1",
+            hdr=False,
+            sdr=False,
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("lg_tv_automation.cli.play.parse_args", return_value=args),
+            patch("lg_tv_automation.cli.play.choose_hdr_mode", return_value=(False, "default")),
+            patch("lg_tv_automation.cli.play.snapshot_runtime_state", new=AsyncMock(return_value={})),
+            patch("lg_tv_automation.cli.play.session_lock"),
+            patch("lg_tv_automation.cli.play.TvController") as tv_controller,
+        ):
+            result = await async_main()
+
+        self.assertEqual(result, 0)
+        tv_controller.assert_not_called()
+
     async def test_tv_connect_timeout_mentions_pairing_prompt(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         fake_client = SimpleNamespace(connect=AsyncMock(), disconnect=AsyncMock())
 
         async def timeout_wait_for(awaitable, timeout):
@@ -517,7 +639,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
                     await controller.__aenter__()
 
     async def test_hidden_setting_timeout_raises_readable_error(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(request=AsyncMock())
 
         async def timeout_wait_for(awaitable, timeout):
@@ -530,7 +652,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
                 await controller._alert_luna("luna://example", {"x": 1})
 
     async def test_apply_profile_times_out_trumotion_write_cleanly(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
             set_system_picture_mode=AsyncMock(),
             set_current_picture_mode=AsyncMock(),
@@ -572,7 +694,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("truMotion change failed" in failure for failure in controller.failures))
 
     async def test_apply_profile_reapplies_hdmi_state_after_picture_writes(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
             set_picture_settings=AsyncMock(),
         )
@@ -619,7 +741,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(controller.failures)
 
     async def test_status_falls_back_to_ui_error_when_ui_capture_times_out(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.ui = SimpleNamespace(
             capture_hdmi_settings_state=AsyncMock(),
             capture_game_optimizer_state=AsyncMock(
@@ -739,7 +861,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_capture_raises_when_exact_ui_state_is_required(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(get_current_app=AsyncMock(return_value="com.webos.app.hdmi1"))
         controller._get_input_info = AsyncMock(
             return_value={"label": "HDMI 1", "icon": "HDMI_1.png", "appId": "com.webos.app.hdmi1"}
@@ -766,7 +888,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, 2)
 
     async def test_apply_profile_does_not_use_ui_fallback_in_main_flow(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
             set_system_picture_mode=AsyncMock(),
             set_current_picture_mode=AsyncMock(),
@@ -796,7 +918,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             await controller.apply_profile(profile, dry_run=False)
 
     async def test_apply_profile_retries_picture_mode_with_legacy_path(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
             set_system_picture_mode=AsyncMock(return_value=None),
             set_current_picture_mode=AsyncMock(return_value=None),
@@ -851,7 +973,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=False,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -896,7 +1017,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=False,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -921,6 +1041,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         fake_tv.__aenter__.return_value = fake_tv
 
         with (
+            patch.dict(os.environ, {"LG_TV_IP": "203.0.113.10"}, clear=False),
             patch("lg_tv_automation.cli.play.parse_args", return_value=args),
             patch("lg_tv_automation.cli.play.choose_hdr_mode", return_value=(True, "forced")),
             patch("lg_tv_automation.cli.play.choose_display_refresh_rate", return_value=(24.0, "fps=24")),
@@ -948,7 +1069,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=False,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -973,6 +1093,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         fake_tv.__aenter__.return_value = fake_tv
 
         with (
+            patch.dict(os.environ, {"LG_TV_IP": "203.0.113.10"}, clear=False),
             patch("lg_tv_automation.cli.play.parse_args", return_value=args),
             patch("lg_tv_automation.cli.play.choose_hdr_mode", return_value=(True, "forced")),
             patch("lg_tv_automation.cli.play.choose_display_refresh_rate", return_value=(24.0, "fps=24")),
@@ -1001,7 +1122,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=False,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -1049,7 +1169,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=True,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -1085,7 +1204,6 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             restore_saved_state=False,
             debug_log=None,
             debug_cue_seconds=8.0,
-            tv_ip="192.168.1.134",
             tv_input="HDMI_1",
             display_output="HDMI-A-1",
             movie_label="HDMI 1",
@@ -1109,7 +1227,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 1)
 
     async def test_apply_hidden_hdmi_state_hard_disables_allm_auto_game_path(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller._set_hidden_other_settings = AsyncMock()
 
         with patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()):
@@ -1135,7 +1253,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[3].args[0], {"444BypassHDMI1": "off"})
 
     async def test_apply_hidden_hdmi_state_enables_allm_auto_game_path_for_desktop(self) -> None:
-        controller = TvController("192.168.1.134", "HDMI_1")
+        controller = TvController("203.0.113.10", "HDMI_1")
         controller._set_hidden_other_settings = AsyncMock()
 
         with patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()):
