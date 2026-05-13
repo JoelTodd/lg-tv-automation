@@ -53,6 +53,7 @@ This repo therefore automates:
 
 ```text
 lg-tv-automation/
+├── LICENSE
 ├── README.md
 ├── pyproject.toml
 ├── bin/
@@ -78,6 +79,7 @@ lg-tv-automation/
 │   │   ├── edid.py
 │   │   ├── play.py
 │   │   └── ui_probe.py
+│   ├── config.py
 │   ├── constants.py
 │   ├── console.py
 │   ├── display.py
@@ -219,6 +221,26 @@ When `lg-tv-play` launches `mpv`, it must:
 
 The code treats that last requirement as hard policy, not best effort.
 
+## Public safety notes
+
+This repo is safe to publish as an example project, but it intentionally leaves
+local state outside version control:
+
+- TV pairing state is not tracked. `bscpylgtv` may create `.aiopylgtv.sqlite`;
+  keep that local and pair your own TV when first connecting.
+- TV automation reads the TV address from `LG_TV_IP`. For example:
+
+  ```bash
+  export LG_TV_IP=192.0.2.10
+  ```
+
+  Commands that use `--no-tv` do not need this variable.
+- The checked-in EDID blobs are example assets for this hardware-specific
+  Fedora KDE + NVIDIA + LG OLED setup. Review them before adapting the EDID
+  workflow to a different display.
+
+The project is released under the MIT License; see `LICENSE`.
+
 ## Commands
 
 Install or refresh user-level command links:
@@ -241,11 +263,13 @@ On this Fedora host, `/usr/local/sbin` is a symlink to `/usr/local/bin`, so
 `type -a lg-tv-edid` can show both paths even though there is only one system
 link target.
 
-Status:
+Status, with `LG_TV_IP` set unless you pass `--no-tv`:
 
 ```bash
+export LG_TV_IP=192.0.2.10
 lg-tv-play --status
 lg-tv-play --status --no-tv-ui
+lg-tv-play --status --no-tv
 ```
 
 `--status` emits a single JSON document containing both `display` and `tv`
@@ -280,6 +304,7 @@ use with `sudo` from the checkout.
 Manual movie preset:
 
 ```bash
+export LG_TV_IP=192.0.2.10
 lg-tv-play --movie-mode --hdr
 lg-tv-play --movie-mode --sdr
 lg-tv-play --movie-mode -- /path/to/movie.mkv
@@ -288,12 +313,14 @@ lg-tv-play --movie-mode -- /path/to/movie.mkv
 Manual desktop preset:
 
 ```bash
+export LG_TV_IP=192.0.2.10
 lg-tv-play --desktop-mode
 ```
 
 Normal playback:
 
 ```bash
+export LG_TV_IP=192.0.2.10
 lg-tv-play -- /path/to/movie.mkv
 ```
 
@@ -320,6 +347,7 @@ most fragile part of the stack.
 UI exploration:
 
 ```bash
+export LG_TV_IP=192.0.2.10
 lg-tv-ui-probe --out-dir /tmp/lg-probe --status --before
 lg-tv-ui-probe --out-dir /tmp/lg-probe --launch-app com.webos.app.gameoptimizer --buttons RIGHT DOWN DOWN
 ```
@@ -346,7 +374,7 @@ instead of falling back to Fedora's system `python3`.
 One setup path is:
 
 ```bash
-cd /home/joel/code/lg-tv-automation
+cd ~/code/lg-tv-automation
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
@@ -368,15 +396,15 @@ The safe local checks are:
 
 ```bash
 bash -n \
-  /home/joel/code/lg-tv-automation/bin/lg-tv-edid \
-  /home/joel/code/lg-tv-automation/bin/lg-tv-play \
-  /home/joel/code/lg-tv-automation/bin/lg-tv-ui-probe \
-  /home/joel/code/lg-tv-automation/scripts/install-command-links.sh \
-  /home/joel/code/lg-tv-automation/scripts/install-edid-override.sh \
-  /home/joel/code/lg-tv-automation/scripts/remove-edid-override.sh \
-  /home/joel/code/lg-tv-automation/scripts/verify-edid-override.sh
+  /path/to/lg-tv-automation/bin/lg-tv-edid \
+  /path/to/lg-tv-automation/bin/lg-tv-play \
+  /path/to/lg-tv-automation/bin/lg-tv-ui-probe \
+  /path/to/lg-tv-automation/scripts/install-command-links.sh \
+  /path/to/lg-tv-automation/scripts/install-edid-override.sh \
+  /path/to/lg-tv-automation/scripts/remove-edid-override.sh \
+  /path/to/lg-tv-automation/scripts/verify-edid-override.sh
 
-/home/joel/code/lg-tv-automation/.venv/bin/pytest -q
+python -m pytest -q
 lg-tv-edid verify --no-kscreen
 ```
 

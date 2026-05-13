@@ -27,8 +27,8 @@ from ..constants import (
     DEFAULT_SDR_PICTURE_MODE,
     DEFAULT_TRUMOTION,
     DEFAULT_TV_INPUT,
-    DEFAULT_TV_IP,
 )
+from ..config import require_tv_ip
 from ..display import DisplayController, load_display_output
 from ..media import (
     choose_display_refresh_rate,
@@ -220,7 +220,6 @@ def parse_args() -> argparse.Namespace:
         help="Seconds after mpv launch to emit the debug picture cue. Default: 8.0",
     )
 
-    parser.add_argument("--tv-ip", default=DEFAULT_TV_IP, help=f"TV IP address. Default: {DEFAULT_TV_IP}")
     parser.add_argument(
         "--tv-input",
         default=DEFAULT_TV_INPUT,
@@ -288,6 +287,8 @@ def parse_args() -> argparse.Namespace:
 async def print_status(args: argparse.Namespace) -> int:
     """Print current display state and optional TV state as JSON."""
 
+    tv_ip = None if args.no_tv else require_tv_ip()
+
     output = load_display_output(args.display_output)
     payload = {
         "display": {
@@ -302,7 +303,7 @@ async def print_status(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    async with TvController(args.tv_ip, args.tv_input) as tv:
+    async with TvController(tv_ip, args.tv_input) as tv:
         if args.no_tv_ui:
             payload["tv"] = await tv.capture(include_ui_state=False)
         else:
@@ -378,7 +379,6 @@ async def async_main() -> int:
             "start",
             {
                 "argv": mpv_args,
-                "tv_ip": args.tv_ip,
                 "tv_input": args.tv_input,
                 "display_output": args.display_output,
             },
@@ -396,6 +396,7 @@ async def async_main() -> int:
             if not apply_only_mode and not mpv_args:
                 raise SystemExit("No mpv arguments provided.")
 
+            tv_ip = None if args.no_tv else require_tv_ip()
             display: DisplayController | None = None
             tv: TvController | None = None
             mpv_returncode = 0
@@ -456,7 +457,7 @@ async def async_main() -> int:
 
                 if not args.no_tv:
                     try:
-                        tv = TvController(args.tv_ip, args.tv_input)
+                        tv = TvController(tv_ip, args.tv_input)
                         await tv.__aenter__()
                         if restore_saved_state:
                             await tv.capture(

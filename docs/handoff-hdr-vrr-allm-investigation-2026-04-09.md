@@ -66,10 +66,10 @@ Tracked modifications after `c9c9639`:
 Historical session artifacts from this investigation:
 
 - TV pairing state now lives outside the repo at
-  `/home/joel/.aiopylgtv.sqlite`; do not keep a repo-local SQLite copy.
+  `~/.aiopylgtv.sqlite`; do not keep a repo-local SQLite copy.
 - The original `tv-pics-test/` screenshot evidence was moved out of this
   checkout on 2026-04-20 to:
-  `/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`
+  `/path/to/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`
 - `tv-pics-test/...` references below are historical relative paths into that
   external evidence directory.
 
@@ -532,7 +532,7 @@ Coverage added in this run includes:
 At the time of the last validation in this run:
 
 - `python3 -m py_compile ...` passed
-- `PYTHONPATH=/home/joel/code/lg-tv-automation/src python3 -m unittest discover -s /home/joel/code/lg-tv-automation/tests`
+- `PYTHONPATH=/path/to/lg-tv-automation/src python3 -m unittest discover -s /path/to/lg-tv-automation/tests`
   passed with `22/22`
 
 ## Important Evidence Directories
@@ -631,10 +631,10 @@ Important warning:
   work has been committed; use `git status` for current truth.
 - The current environment was KDE Wayland on Fedora with NVIDIA and a single
   HDMI-connected LG OLED. That stack behavior matters.
-- TV pairing state should live at `/home/joel/.aiopylgtv.sqlite`, not in the
+- TV pairing state should live at `~/.aiopylgtv.sqlite`, not in the
   repository.
 - April 9 UI screenshot evidence is preserved outside the checkout at
-  `/home/joel/Documents/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`.
+  `/path/to/system-troubleshooting/2026-04-09-lg-tv-automation-ui-evidence/tv-pics-test/`.
 
 ## Bottom Line
 

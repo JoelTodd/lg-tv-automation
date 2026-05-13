@@ -11,7 +11,8 @@ from pathlib import Path
 
 from bscpylgtv import WebOsClient
 
-from ..constants import DEFAULT_RETURN_APP, DEFAULT_TV_IP
+from ..config import require_tv_ip
+from ..constants import DEFAULT_RETURN_APP
 
 
 def parse_args() -> argparse.Namespace:
@@ -20,7 +21,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send LG webOS remote keys and save screenshots after each step."
     )
-    parser.add_argument("--tv-ip", default=DEFAULT_TV_IP)
     parser.add_argument("--out-dir", required=True, help="Directory for captured screenshots.")
     parser.add_argument(
         "--return-app",
@@ -78,10 +78,11 @@ async def async_main() -> int:
     """Run the screenshot-driven UI probe session."""
 
     args = parse_args()
+    tv_ip = require_tv_ip()
     out_dir = Path(args.out_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    client = await WebOsClient.create(args.tv_ip)
+    client = await WebOsClient.create(tv_ip)
     await client.connect()
     try:
         if args.status:
@@ -115,4 +116,7 @@ async def async_main() -> int:
 
 
 def main() -> None:
-    raise SystemExit(asyncio.run(async_main()))
+    try:
+        raise SystemExit(asyncio.run(async_main()))
+    except RuntimeError as err:
+        raise SystemExit(str(err)) from err

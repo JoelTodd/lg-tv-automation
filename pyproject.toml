@@ -7,6 +7,7 @@ name = "lg-tv-automation"
 version = "0.1.0"
 description = "Fedora KDE + NVIDIA + LG webOS playback automation for mpv."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "bscpylgtv",
