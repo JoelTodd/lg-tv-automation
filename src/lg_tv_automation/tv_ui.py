@@ -86,10 +86,17 @@ class LgTvUiAutomation:
         return count
 
     def detect_master_on(self, image: Image.Image) -> bool:
-        return self._saturated_pixel_count(image, self.MASTER_SWITCH_BOX, 0.72, 0.92) > 650
+        """Return whether the Game Optimizer master switch is visibly on.
+
+        Current LG firmware draws the switch border in magenta in both states,
+        so the old magenta-pixel threshold classified an off switch as on.  The
+        on-state thumb itself is amber, which remains absent from the off state.
+        """
+
+        return self._saturated_pixel_count(image, self.MASTER_SWITCH_BOX, 0.05, 0.20) > 8
 
     def detect_row_toggle_on(self, image: Image.Image) -> bool:
-        return self._saturated_pixel_count(image, self.ROW_SWITCH_BOX, 0.72, 0.92) > 150
+        return self._saturated_pixel_count(image, self.ROW_SWITCH_BOX, 0.05, 0.20) > 8
 
     def detect_hdmi_settings_page(self, image: Image.Image) -> bool:
         cec_green = self._saturated_pixel_count(image, self.HDMI_CEC_SWITCH_BOX, 0.25, 0.45)
@@ -196,6 +203,37 @@ class LgTvUiAutomation:
         self._save_artifact(master_image, artifact_dir, "game-optimizer-master.png")
         return master_image
 
+    async def set_game_optimizer_master(
+        self,
+        enabled: bool,
+        *,
+        artifact_dir: Path | None = None,
+    ) -> bool:
+        """Set and visibly verify the Game Optimizer master switch.
+
+        The hidden ``gameMode`` setting stopped moving this switch on current
+        TV firmware.  Keep using the hidden write as a fast first attempt, then
+        use this UI path as the authoritative verification and fallback.
+        """
+
+        try:
+            image = await self.open_game_optimizer_master(artifact_dir=artifact_dir)
+            current = self.detect_master_on(image)
+            if current != enabled:
+                await self._press("ENTER", 0.9)
+                image = await self._wait_for_game_optimizer_page()
+                self._save_artifact(image, artifact_dir, "game-optimizer-master-after-set.png")
+                current = self.detect_master_on(image)
+            if current != enabled:
+                state = "on" if enabled else "off"
+                raise RuntimeError(f"Game Optimizer master did not visibly switch {state}.")
+            return current
+        finally:
+            try:
+                await self.close_overlay()
+            except Exception:
+                pass
+
     async def capture_game_optimizer_state(self, *, artifact_dir: Path | None = None) -> dict[str, bool]:
         """Read Game Optimizer master, VRR, and ALLM from the visible UI."""
 
@@ -206,11 +244,13 @@ class LgTvUiAutomation:
                 await self._press("ENTER", 0.9)
 
             await self._press_many("DOWN", 6, 0.2)
+            await self._sleep(0.5)
             vrr_image = await self._capture_image()
             self._save_artifact(vrr_image, artifact_dir, "game-optimizer-vrr.png")
             vrr_on = self.detect_row_toggle_on(vrr_image)
 
             await self._press_many("DOWN", 3, 0.2)
+            await self._sleep(0.5)
             allm_image = await self._capture_image()
             self._save_artifact(allm_image, artifact_dir, "game-optimizer-allm.png")
             allm_on = self.detect_row_toggle_on(allm_image)

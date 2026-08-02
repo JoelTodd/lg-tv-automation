@@ -58,6 +58,7 @@ class SavedTvState:
     app_id: str
     hdmi_features: HdmiFeatureState | None = None
     exact: bool = True
+    hdmi_signal_exists: bool | None = None
 
     def as_profile(self) -> TvProfile:
         """Convert the captured state into a re-applicable profile."""
@@ -81,6 +82,8 @@ class SavedTvState:
             "app_id": self.app_id,
             "exact": self.exact,
         }
+        if self.hdmi_signal_exists is not None:
+            payload["hdmi_signal_exists"] = self.hdmi_signal_exists
         if self.hdmi_features is not None:
             payload.update(self.hdmi_features.as_dict())
         return payload

@@ -29,6 +29,7 @@ TV_HIDDEN_SETTINGS_TIMEOUT = 3.0
 TV_UI_CAPTURE_TIMEOUT = 45.0
 TV_PICTURE_MODE_VERIFY_TIMEOUT = 8.0
 TV_PICTURE_MODE_RETRY_BACKOFFS = (0.75, 1.5, 2.5, 3.5)
+TV_HDMI_SIGNAL_TIMEOUT = 6.0
 
 
 class TvController:
@@ -185,6 +186,29 @@ class TvController:
                 f"launch {self.input_app_id}",
             )
             await asyncio.sleep(delay)
+
+    async def _ensure_hdmi_signal(self) -> None:
+        """Require the TV to see HDMI pixels after a profile transition.
+
+        A Fedora 44 / NVIDIA transition can leave KScreen reporting an enabled
+        output while webOS remains stuck on ``No Signal``.  Do not claim the
+        profile succeeded merely because KScreen's logical state looks intact.
+        """
+
+        assert self.client is not None
+        input_info = await self._get_input_info()
+        if "hdmiSignalExist" not in input_info:
+            return
+        if input_info["hdmiSignalExist"]:
+            return
+
+        await self._wait_for_value(
+            self._get_input_info,
+            lambda info: bool(info.get("hdmiSignalExist")),
+            f"{self.input_id} signal",
+            timeout=TV_HDMI_SIGNAL_TIMEOUT,
+            interval=0.5,
+        )
 
     async def _set_hidden_other_settings(self, settings: dict[str, Any], description: str) -> None:
         log(f"Setting {description}.")
@@ -347,6 +371,7 @@ class TvController:
             app_id=input_info["appId"],
             hdmi_features=hdmi_features,
             exact=hdmi_features is not None or not include_ui_state,
+            hdmi_signal_exists=input_info.get("hdmiSignalExist"),
         )
         return self.saved_state.as_dict()
 
@@ -379,6 +404,12 @@ class TvController:
             )
         except Exception as err:
             ui_errors.append(f"Game Optimizer: {err}")
+        try:
+            await self._ensure_input_active(delay=0.5)
+            await self._ensure_hdmi_signal()
+            payload["input"] = await self._get_input_info()
+        except Exception as err:
+            ui_errors.append(f"HDMI signal: {err}")
         if ui_errors:
             payload["ui_error"] = "; ".join(ui_errors)
         return payload
@@ -571,6 +602,32 @@ class TvController:
                 await self._apply_hidden_hdmi_state(profile.hdmi_features)
             except Exception as err:
                 message = f"Final HDMI/Game Optimizer state change failed: {err}"
+                self.failures.append(message)
+                log(message)
+
+            if self.ui is not None:
+                try:
+                    desired_master = profile.hdmi_features.game_optimizer_master
+                    log(
+                        "Visibly verifying Game Optimizer master is "
+                        f"{'on' if desired_master else 'off'}."
+                    )
+                    await self._capture_ui_probe(
+                        lambda: self.ui.set_game_optimizer_master(desired_master),
+                        "verify Game Optimizer master UI state",
+                    )
+                except Exception as err:
+                    message = f"TV Game Optimizer master verification failed: {err}"
+                    self.failures.append(message)
+                    log(message)
+
+        if self.ui is not None:
+            try:
+                log(f"Verifying {self.input_id} has a live HDMI signal.")
+                await self._ensure_input_active(delay=0.5)
+                await self._ensure_hdmi_signal()
+            except Exception as err:
+                message = f"TV HDMI signal verification failed: {err}"
                 self.failures.append(message)
                 log(message)
 

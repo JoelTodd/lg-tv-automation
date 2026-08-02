@@ -149,6 +149,13 @@ The hidden-setting route uses a deliberate workaround:
 
 This is significantly faster and more reliable than walking the TV UI.
 
+Current LG firmware accepts the hidden `gameMode` write but does not move the
+visible Game Optimizer master switch. Profile application therefore keeps the
+direct write for ordering compatibility, then opens the Game Optimizer overlay,
+detects the amber on-state thumb, toggles the master only when necessary, and
+visibly verifies the result. A failure in this verification is fatal to preset
+application and prevents playback from starting.
+
 ### 5. TV UI exploration and state probes
 
 `src/lg_tv_automation/tv_ui.py` and `src/lg_tv_automation/cli/ui_probe.py` are
@@ -240,6 +247,14 @@ local state outside version control:
 
 The project is released under the MIT License; see `LICENSE`.
 
+Profile changes can retrain the only HDMI link. On the Fedora 44 + NVIDIA stack,
+KScreen can occasionally reconstruct a logically enabled output while the TV
+remains on `No Signal`. Every real TV profile now waits for webOS
+`hdmiSignalExist` before reporting success, starting `mpv`, or completing
+cleanup. The app does not pretend that switching TV apps is equivalent to a
+physical cable replug; if the signal does not return within the bounded wait,
+the command fails explicitly.
+
 ## Commands
 
 Install or refresh user-level command links:
@@ -273,6 +288,9 @@ lg-tv-play --status --no-tv
 
 `--status` emits a single JSON document containing both `display` and `tv`
 keys.
+
+Direct TV status includes `hdmi_signal_exists`, so a connected KScreen output
+can be distinguished from a link that is actually delivering pixels to webOS.
 
 `--status` does not run concurrently with an active playback or preset session.
 

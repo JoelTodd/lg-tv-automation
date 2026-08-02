@@ -249,11 +249,11 @@ class HelperTests(unittest.TestCase):
         self.assertIn(str(feature), reason)
         detect.assert_called_once_with(feature)
 
-    def test_detect_master_on_uses_lowered_threshold(self) -> None:
+    def test_detect_master_on_uses_amber_thumb_instead_of_magenta_border(self) -> None:
         ui = object.__new__(LgTvUiAutomation)
-        ui._saturated_pixel_count = lambda *_args, **_kwargs: 700
+        ui._saturated_pixel_count = lambda *_args, **_kwargs: 9
         self.assertTrue(ui.detect_master_on(None))
-        ui._saturated_pixel_count = lambda *_args, **_kwargs: 600
+        ui._saturated_pixel_count = lambda *_args, **_kwargs: 8
         self.assertFalse(ui.detect_master_on(None))
 
     def test_detect_game_optimizer_page_uses_header_threshold(self) -> None:
@@ -262,6 +262,13 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(ui.detect_game_optimizer_page(None))
         ui._saturated_pixel_count = lambda *_args, **_kwargs: 4000
         self.assertFalse(ui.detect_game_optimizer_page(None))
+
+    def test_detect_row_toggle_on_uses_amber_thumb(self) -> None:
+        ui = object.__new__(LgTvUiAutomation)
+        ui._saturated_pixel_count = lambda *_args, **_kwargs: 9
+        self.assertTrue(ui.detect_row_toggle_on(None))
+        ui._saturated_pixel_count = lambda *_args, **_kwargs: 8
+        self.assertFalse(ui.detect_row_toggle_on(None))
 
     def test_detect_hdmi_settings_page_allows_movie_mode_toggles_off(self) -> None:
         ui = object.__new__(LgTvUiAutomation)
@@ -675,6 +682,22 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "create hidden settings alert"):
                 await controller._alert_luna("luna://example", {"x": 1})
 
+    async def test_hdmi_signal_verification_requires_signal_to_return(self) -> None:
+        controller = TvController("203.0.113.10", "HDMI_1")
+        controller.client = SimpleNamespace()
+        controller._get_input_info = AsyncMock(return_value={"hdmiSignalExist": False})
+        controller._wait_for_value = AsyncMock(return_value={"hdmiSignalExist": True})
+
+        await controller._ensure_hdmi_signal()
+
+        controller._wait_for_value.assert_awaited_once_with(
+            controller._get_input_info,
+            unittest.mock.ANY,
+            "HDMI_1 signal",
+            timeout=6.0,
+            interval=0.5,
+        )
+
     async def test_apply_profile_times_out_trumotion_write_cleanly(self) -> None:
         controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
@@ -683,7 +706,9 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             set_picture_settings=AsyncMock(),
             set_settings=AsyncMock(),
         )
-        controller.ui = SimpleNamespace()
+        controller.ui = SimpleNamespace(
+            set_game_optimizer_master=AsyncMock(return_value=False),
+        )
         controller._ensure_input_active = AsyncMock()
         controller._get_input_info = AsyncMock(return_value={"label": "HDMI 1", "icon": "HDMI_1.png"})
         controller._get_picture_mode = AsyncMock(side_effect=["hdrFilmMaker", "hdrFilmMaker"])
@@ -809,6 +834,21 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_set_game_optimizer_master_toggles_and_verifies_visible_state(self) -> None:
+        client = SimpleNamespace()
+        ui = LgTvUiAutomation(client, "com.webos.app.hdmi1")
+        ui.open_game_optimizer_master = AsyncMock(return_value="off-image")
+        ui._wait_for_game_optimizer_page = AsyncMock(return_value="on-image")
+        ui._press = AsyncMock()
+        ui.close_overlay = AsyncMock()
+        ui.detect_master_on = lambda image: image == "on-image"
+
+        result = await ui.set_game_optimizer_master(True)
+
+        self.assertTrue(result)
+        ui._press.assert_awaited_once_with("ENTER", 0.9)
+        ui.close_overlay.assert_awaited_once()
+
     async def test_capture_game_optimizer_state_uses_expected_row_offsets(self) -> None:
         client = SimpleNamespace()
         ui = LgTvUiAutomation(client, "com.webos.app.hdmi1")
@@ -911,7 +951,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(interrupted)
         self.assertEqual(calls, 2)
 
-    async def test_apply_profile_does_not_use_ui_fallback_in_main_flow(self) -> None:
+    async def test_apply_profile_visibly_verifies_game_optimizer_master(self) -> None:
         controller = TvController("203.0.113.10", "HDMI_1")
         controller.client = SimpleNamespace(
             set_system_picture_mode=AsyncMock(),
@@ -923,7 +963,9 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             return_value={"label": "HDMI 1", "icon": "HDMI_1.png"}
         )
         controller._get_picture_mode = AsyncMock(return_value="hdrFilmMaker")
-        controller._apply_hidden_hdmi_state = AsyncMock(side_effect=RuntimeError("hidden write failed"))
+        controller._apply_hidden_hdmi_state = AsyncMock()
+        controller.ui = SimpleNamespace(set_game_optimizer_master=AsyncMock(return_value=False))
+        controller._capture_ui_probe = AsyncMock(return_value=False)
 
         profile = TvProfile(
             label="HDMI 1",
@@ -940,6 +982,9 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()):
             await controller.apply_profile(profile, dry_run=False)
+
+        self.assertEqual(controller._apply_hidden_hdmi_state.await_count, 2)
+        controller._capture_ui_probe.assert_awaited_once()
 
     async def test_apply_profile_retries_picture_mode_with_legacy_path(self) -> None:
         controller = TvController("203.0.113.10", "HDMI_1")
