@@ -10,23 +10,18 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-  "bscpylgtv",
-  "Pillow",
+  "bscpylgtv>=0.5.1,<0.6",
+  "Pillow>=12,<13",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
 
 [project.scripts]
-lg-tv-edid = "lg_tv_automation.cli.edid:main"
 lg-tv-play = "lg_tv_automation.cli.play:main"
-lg-tv-ui-probe = "lg_tv_automation.cli.ui_probe:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-"lg_tv_automation.assets.edid" = ["*.bin"]

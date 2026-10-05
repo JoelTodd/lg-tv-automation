@@ -1,460 +1,64 @@
-# LG TV Automation
+# LG TV playback
 
-`lg-tv-automation` is a small Python repo for one very specific workstation:
-Fedora KDE on Wayland with NVIDIA, connected over HDMI to an LG OLED running
-webOS, with `mpv` as the playback front end.
-
-The repo exists to make the setup understandable and maintainable, not just
-functional. The command surface stays intentionally small:
-
-- `lg-tv-play`: apply movie mode, apply desktop mode, print status, or wrap `mpv`
-- `lg-tv-edid`: manage and verify the local HDR 119.88 Hz EDID override
-- `lg-tv-ui-probe`: exploratory screenshot-driven UI automation tool
-
-Current operating baseline:
-
-- keep the Fedora desktop link at 4K 119.88 Hz unless a command explicitly asks
-  for refresh switching
-- keep HDR/WCG enabled for HDR playback
-- remove HDMI Forum ALLM/VRR from the live EDID so the LG does not force
-  low-latency behavior at HDR 119.88 Hz
-- use TV hidden-setting writes as a profile-control layer, not as the only
-  mitigation for the HDR 119.88 Hz low-latency issue
-
-When a local directory is passed to `lg-tv-play`, it resolves that directory to
-the most likely primary media file before both probing and playback. This
-avoids `mpv` treating multi-file release folders as ad-hoc playlists.
-
-## Scope
-
-The automation is built around these real constraints:
-
-- Fedora-side HDR/WCG toggling is reliable through `kscreen-doctor`
-- `mpv` playback is already stable with the current local configuration
-- The LG TV exposes some relevant settings directly and hides others
-- The user must always be returned to `HDMI 1` because that is the path through
-  which terminal-side troubleshooting remains possible
-
-This repo therefore automates:
-
-- Fedora display HDR/WCG changes
-- TV input relabeling between desktop and movie-friendly states
-- TV picture mode switching between `expert1`, `filmMaker`, and `hdrFilmMaker`
-- default `truMotionMode` writes for movie mode, using `cinematicMovement`
-  (Cinematic Movement)
-- local EDID override management for the HDR 119.88 Hz ALLM/VRR workaround
-- hidden HDMI/Game Optimizer flags:
-  - `4:4:4 Pass Through`
-  - Game Optimizer master
-  - `VRR & G-Sync`
-  - `ALLM`
-
-## Repository Layout
-
-```text
-lg-tv-automation/
-├── LICENSE
-├── README.md
-├── pyproject.toml
-├── bin/
-│   ├── lg-tv-edid
-│   ├── lg-tv-play
-│   └── lg-tv-ui-probe
-├── docs/
-│   ├── hdr119-allm-vrr-edid-override.md
-│   ├── handoff-hdr-vrr-allm-investigation-2026-04-09.md
-│   ├── handoff-kde-discover-output-state.md
-│   └── troubleshooting-artifacts.md
-├── scripts/
-│   ├── install-command-links.sh
-│   ├── install-edid-override.sh
-│   ├── remove-edid-override.sh
-│   └── verify-edid-override.sh
-├── src/lg_tv_automation/
-│   ├── assets/
-│   │   └── edid/
-│   │       ├── lg-tv-sscr2-no-allm-vrr.bin
-│   │       └── lg-tv-sscr2-original.bin
-│   ├── cli/
-│   │   ├── edid.py
-│   │   ├── play.py
-│   │   └── ui_probe.py
-│   ├── config.py
-│   ├── constants.py
-│   ├── console.py
-│   ├── display.py
-│   ├── media.py
-│   ├── models.py
-│   ├── process.py
-│   ├── profiles.py
-│   ├── tv.py
-│   └── tv_ui.py
-└── tests/
-    └── test_helpers.py
-```
-
-## Architecture
-
-### 1. Playback wrapper
-
-`src/lg_tv_automation/cli/play.py` is the user-facing entry point. It decides:
-
-- whether the target content should be treated as SDR or HDR
-- whether the command is a preset-only operation or a full `mpv` run
-- whether playback cleanup should restore the exact captured state or the
-  configured desktop preset
-
-### 2. EDID override management
-
-`src/lg_tv_automation/cli/edid.py` owns the stable EDID override workflow for
-the LG HDR 119.88 Hz ALLM/VRR issue. It can install, remove, check status, and
-verify the packaged patched EDID.
-
-The packaged override keeps HDR/WCG data intact and removes only HDMI Forum
-ALLM/VRR advertising. See `docs/hdr119-allm-vrr-edid-override.md`.
-
-### 3. Fedora display control
-
-`src/lg_tv_automation/display.py` owns `kscreen-doctor` interaction. The retry
-logic around `kscreen-doctor -j` is important: the display stack can briefly
-drop the output during HDR transitions, and immediate failure would strand the
-desktop in the wrong state.
-
-Some deployments intentionally remove HDMI Forum VRR/ALLM from the TV EDID to
-avoid LG HDR 119.88 Hz low-latency behavior. In that state KScreen reports
-`Vrr: incapable` and omits a configurable `vrrPolicy`. The display controller
-treats that as satisfying movie-mode VRR-off requirements and skips desktop VRR
-policy restore, while still applying HDR/WCG normally.
-
-That behavior is not only a restore-risk for this tool. On this KDE Wayland +
-NVIDIA + single-HDMI stack, some already-running GUI apps can survive a display
-topology glitch in a stale state afterward. The repo keeps the display logic
-small and explicit, and documents the broader symptom in
-`docs/handoff-kde-discover-output-state.md`.
-
-### 4. TV direct control
-
-`src/lg_tv_automation/tv.py` owns the fast path:
-
-- input label/icon changes through `set_device_info`
-- picture mode changes through the available picture APIs
-- hidden settings writes for `4:4:4 Pass Through`, Game Optimizer, `VRR`, and `ALLM`
-
-The hidden-setting route uses a deliberate workaround:
-
-- create a temporary alert with `system.notifications/createAlert`
-- attach a button callback that calls
-  `luna://com.webos.settingsservice/setSystemSettings`
-- immediately close the alert, which triggers the same callback path
-
-This is significantly faster and more reliable than walking the TV UI.
-
-Current LG firmware accepts the hidden `gameMode` write but does not move the
-visible Game Optimizer master switch. Profile application therefore keeps the
-direct write for ordering compatibility, then opens the Game Optimizer overlay,
-detects the amber on-state thumb, toggles the master only when necessary, and
-visibly verifies the result. A failure in this verification is fatal to preset
-application and prevents playback from starting.
-
-### 5. TV UI exploration and state probes
-
-`src/lg_tv_automation/tv_ui.py` and `src/lg_tv_automation/cli/ui_probe.py` are
-kept on purpose even though direct hidden writes are the preferred playback
-control path.
-
-They are useful when:
-
-- status output or exact-state capture needs UI-visible HDMI/Game Optimizer data
-- additional undocumented settings need to be discovered
-- visual confirmation of a UI-only control path is needed
-
-## Runtime Behaviour
-
-### Movie mode
-
-Movie mode does the following:
-
-- leave refresh rate alone by default
-- optionally force `4K60` if `--force-60hz` is explicitly requested
-- optionally match the source frame rate if `--match-refresh` is explicitly requested
-- enable Fedora HDR/WCG for HDR sources and disable them for SDR sources
-- keep the TV on `HDMI 1`
-- relabel the input as `Blu-ray Player` instead of a generic HDMI/PC device
-- disable `4:4:4 Pass Through`, Game Optimizer, `VRR`, and `ALLM`
-- set the TV picture mode to:
-  - `filmMaker` for SDR
-  - `hdrFilmMaker` for HDR
-- set `truMotionMode` to `cinematicMovement` (Cinematic Movement)
-- re-apply the HDMI/Game Optimizer state after picture-mode writes, because HDR
-  picture-mode transitions can resurrect latency-related TV state
-
-The `Blu-ray Player` / `bluray` relabel is intentionally part of movie mode,
-not cosmetic naming. On this LG firmware/state, leaving HDMI 1 as the generic
-`HDMI 1` / `HDMI_1` profile can keep the Game Optimizer dashboard at
-`Low Latency ON` even after the hidden ALLM off-writes and EDID override are
-active. The Blu-ray input profile is the observed non-PC classification that
-clears the active low-latency path while preserving HDR/WCG and Filmmaker mode.
-
-When `lg-tv-play` launches actual playback rather than `--movie-mode`, it
-leaves the desktop refresh alone by default. Use `--match-refresh` to
-temporarily match the display refresh to the source frame rate, or
-`--force-60hz` to force the output to 4K60.
-
-### Desktop mode
-
-Desktop mode restores the preferred desktop presentation:
-
-- Fedora HDR/WCG disabled
-- picture mode `expert1` (`isf Expert`, bright space/daytime)
-- `4:4:4 Pass Through` enabled
-- Game Optimizer enabled
-- `VRR & G-Sync` enabled
-- `ALLM` enabled
-
-If the active EDID does not expose VRR capability, Fedora-side VRR policy is not
-restored because there is no configurable KScreen policy. The TV-side desktop
-profile is still written.
-
-### Cleanup contract
-
-When `lg-tv-play` launches `mpv`, it must:
-
-1. enter the right movie preset before playback starts
-2. launch `mpv`
-3. restore desktop mode when `mpv` exits
-4. verify cleanup as much as possible
-5. return the TV to `HDMI 1`
-
-The code treats that last requirement as hard policy, not best effort.
-
-## Public safety notes
-
-This repo is safe to publish as an example project, but it intentionally leaves
-local state outside version control:
-
-- TV pairing state is not tracked. `bscpylgtv` may create `.aiopylgtv.sqlite`;
-  keep that local and pair your own TV when first connecting.
-- TV automation reads the TV address from `LG_TV_IP`. For example:
-
-  ```bash
-  export LG_TV_IP=192.0.2.10
-  ```
-
-  Commands that use `--no-tv` do not need this variable.
-- The checked-in EDID blobs are example assets for this hardware-specific
-  Fedora KDE + NVIDIA + LG OLED setup. Review them before adapting the EDID
-  workflow to a different display.
-
-The project is released under the MIT License; see `LICENSE`.
-
-Profile changes can retrain the only HDMI link. On the Fedora 44 + NVIDIA stack,
-KScreen can occasionally reconstruct a logically enabled output while the TV
-remains on `No Signal`. Every real TV profile now waits for webOS
-`hdmiSignalExist` before reporting success, starting `mpv`, or completing
-cleanup. The app does not pretend that switching TV apps is equivalent to a
-physical cable replug; if the signal does not return within the bounded wait,
-the command fails explicitly.
-
-## Commands
-
-Install or refresh user-level command links:
+One command for this Fedora KDE Wayland + NVIDIA workstation and its HDMI-connected LG OLED:
 
 ```bash
+lg-tv-play "/path/to/movie.mkv"
+```
+
+A directory also works: the largest local video is selected before probing and
+playback. Quote paths containing spaces. Missing files and unreadable video
+metadata fail clearly, without starting playback.
+
+The wrapper detects HDR, prepares Fedora HDR/WCG and the TV's movie profile,
+starts mpv, then restores the desktop when playback exits. It preserves the
+desktop refresh rate, classifies the input as Blu-ray for movie processing,
+uses Filmmaker mode and Cinematic Movement, and checks the live HDMI signal.
+Startup performs no UI navigation or screenshots. Independent startup reads
+overlap, and already-satisfied settings aren't rewritten.
+
+Ctrl-C and SIGTERM stop/reap mpv before bounded restoration and disconnect.
+Partial preparation failures roll back the display; cleanup returns to HDMI 1.
+Concurrent playback or Codex maintenance sessions are refused. A hard kill or
+lost TV connection cannot guarantee restoration.
+
+## Setup
+
+Requires Python 3.11+, `mpv`, `ffprobe`, and `kscreen-doctor` on PATH:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
 scripts/install-command-links.sh
 ```
 
-That links `~/.local/bin/lg-tv-play`, `~/.local/bin/lg-tv-ui-probe`, and
-`~/.local/bin/lg-tv-edid` to this checkout's `bin/` wrappers.
+Save the TV address as one line in `~/.config/lg-tv-automation/tv-ip` (or under
+`XDG_CONFIG_HOME`). `LG_TV_IP` provides a temporary override. Pairing is stored
+privately alongside it, independent of the calling directory.
 
-Install system command links when `sudo lg-tv-edid ...` should work without
-spelling the repo script path:
+For a workstation that still has root-owned links to the removed legacy
+commands, run `sudo scripts/cleanup-legacy-system-links.sh`. It validates both
+links before removing either, leaves playback/firmware untouched, and can be
+previewed without sudo using `--dry-run`.
 
-```bash
-sudo scripts/install-command-links.sh --system
-```
+This workstation also requires its existing ALLM/VRR EDID override and Blu-ray
+input classification for full HDR at 119.88 Hz. The wrapper doesn't install or
+alter firmware/boot settings. Ask Codex to handle setup or repair.
 
-On this Fedora host, `/usr/local/sbin` is a symlink to `/usr/local/bin`, so
-`type -a lg-tv-edid` can show both paths even though there is only one system
-link target.
+## Maintenance belongs to Codex
 
-Status, with `LG_TV_IP` set unless you pass `--no-tv`:
+The repository's [lg-tv-control skill](.agents/skills/lg-tv-control/SKILL.md)
+supports visual TV navigation and has the workstation's recovery notes/assets.
+Its private remote transport supplies screenshots and single actions; Codex
+chooses and verifies the steps. There are no scripted menu routes or pixel
+detectors, and no additional public commands, preset/status modes, or UI flags.
 
-```bash
-export LG_TV_IP=192.0.2.10
-lg-tv-play --status
-lg-tv-play --status --no-tv-ui
-lg-tv-play --status --no-tv
-```
+Direct TV API acknowledgments don't prove visible hidden-toggle state. Picture
+mode/TruMotion failures are reported as degraded playback; input or live-signal
+failures stop playback. Ask Codex for visual diagnosis when necessary.
 
-`--status` emits a single JSON document containing both `display` and `tv`
-keys.
+Tests: `.venv/bin/pytest -q`. For developer latency checks, see
+[docs/playback-latency.md](docs/playback-latency.md).
 
-Direct TV status includes `hdmi_signal_exists`, so a connected KScreen output
-can be distinguished from a link that is actually delivering pixels to webOS.
-
-`--status` does not run concurrently with an active playback or preset session.
-
-EDID override status and validation:
-
-```bash
-lg-tv-edid status
-lg-tv-edid verify
-```
-
-From the checkout, `bin/lg-tv-edid` is the stable wrapper if `.venv/bin` is not
-on `PATH`.
-
-EDID override install and recovery:
-
-```bash
-sudo lg-tv-edid install
-sudo systemctl reboot
-
-sudo lg-tv-edid remove
-sudo systemctl reboot
-```
-
-The `scripts/install-edid-override.sh`, `scripts/remove-edid-override.sh`, and
-`scripts/verify-edid-override.sh` wrappers call the same CLI and are safe to
-use with `sudo` from the checkout.
-
-Manual movie preset:
-
-```bash
-export LG_TV_IP=192.0.2.10
-lg-tv-play --movie-mode --hdr
-lg-tv-play --movie-mode --sdr
-lg-tv-play --movie-mode -- /path/to/movie.mkv
-```
-
-Manual desktop preset:
-
-```bash
-export LG_TV_IP=192.0.2.10
-lg-tv-play --desktop-mode
-```
-
-Normal playback:
-
-```bash
-export LG_TV_IP=192.0.2.10
-lg-tv-play -- /path/to/movie.mkv
-```
-
-Useful switches:
-
-```bash
-lg-tv-play --hdr -- /path/to/movie.mkv
-lg-tv-play --sdr -- /path/to/movie.mkv
-lg-tv-play --restore-saved-state -- /path/to/movie.mkv
-lg-tv-play --force-60hz -- /path/to/movie.mkv
-lg-tv-play --match-refresh -- /path/to/movie.mkv
-lg-tv-play --no-tv -- /path/to/movie.mkv
-lg-tv-play --no-tv-ui -- /path/to/movie.mkv
-lg-tv-play --no-display -- /path/to/movie.mkv
-```
-
-`--restore-saved-state` requires TV UI capture, so it is incompatible with
-`--no-tv-ui`.
-
-`--no-display` is the preferred escape hatch when you only need the TV-side
-preset change and do not need Fedora HDR/WCG or mode changes. It avoids the
-most fragile part of the stack.
-
-UI exploration:
-
-```bash
-export LG_TV_IP=192.0.2.10
-lg-tv-ui-probe --out-dir /tmp/lg-probe --status --before
-lg-tv-ui-probe --out-dir /tmp/lg-probe --launch-app com.webos.app.gameoptimizer --buttons RIGHT DOWN DOWN
-```
-
-## Local Dependencies
-
-System tools expected on the Fedora host:
-
-- `mpv`
-- `ffprobe`
-- `kscreen-doctor`
-
-Python packages expected in a project-local `.venv`:
-
-- `bscpylgtv`
-- `Pillow`
-- `pytest`
-
-The checked-in `bin/` launchers resolve the real repo path and execute the
-entrypoints from that `.venv` directly. That means symlinks such as
-`~/.local/bin/lg-tv-play` still run against the repo-managed environment
-instead of falling back to Fedora's system `python3`.
-
-One setup path is:
-
-```bash
-cd ~/code/lg-tv-automation
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-```
-
-Use the repo through the checked-in launchers or the environment's console
-scripts:
-
-```bash
-.venv/bin/lg-tv-edid verify --no-kscreen
-.venv/bin/lg-tv-play --status
-.venv/bin/lg-tv-ui-probe --out-dir /tmp/lg-probe --status --before
-```
-
-Direct calls to the `bin/` wrappers use the same environment.
-
-## Validation
-
-The safe local checks are:
-
-```bash
-bash -n \
-  /path/to/lg-tv-automation/bin/lg-tv-edid \
-  /path/to/lg-tv-automation/bin/lg-tv-play \
-  /path/to/lg-tv-automation/bin/lg-tv-ui-probe \
-  /path/to/lg-tv-automation/scripts/install-command-links.sh \
-  /path/to/lg-tv-automation/scripts/install-edid-override.sh \
-  /path/to/lg-tv-automation/scripts/remove-edid-override.sh \
-  /path/to/lg-tv-automation/scripts/verify-edid-override.sh
-
-python -m pytest -q
-lg-tv-edid verify --no-kscreen
-```
-
-The live hardware checks that matter are:
-
-- `lg-tv-play --status --no-tv-ui`
-- `lg-tv-play --desktop-mode`
-- `lg-tv-play --movie-mode --sdr`
-- `lg-tv-play --movie-mode --hdr`
-- `lg-tv-play -- /path/to/local/test-file`
-
-After any exploratory TV action, confirm the final app is still
-`com.webos.app.hdmi1`.
-
-## Troubleshooting
-
-### KDE apps look stuck after a display transition
-
-This environment can occasionally leave long-running GUI apps in a stale state
-after KScreen output changes. The repo does not try to become a general Plasma
-repair tool, so the guidance stays intentionally small:
-
-- prefer `--no-display` when display-side changes are unnecessary
-- restart the affected app if it survives the output transition badly
-- treat `docs/handoff-kde-discover-output-state.md` as the focused write-up for
-  this failure mode and its rationale
-
-## Notes For Future Maintenance
-
-- Prefer direct hidden-setting writes over UI automation whenever possible.
-- Keep the UI probe working anyway; it is the best recovery tool when LG changes
-  firmware behavior.
-- Do not silently remove the HDMI 1 cleanup guarantees. They are part of the
-  operating model, not an implementation detail.
-- If playback teardown ever stops restoring the desktop correctly, inspect
-  `display.py` first. The display stack is more transient than the TV API.
+MIT licensed. Local TV configuration, pairing credentials and screenshots must
+not be committed.

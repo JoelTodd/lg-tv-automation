@@ -1,0 +1,11 @@
+# Versions used for the playback latency and recovery checks. Install with:
+# .venv/bin/pip install -c constraints-tested.txt -e '.[dev]'
+bscpylgtv==0.5.1
+Pillow==12.2.0
+sqlitedict==2.1.0
+websockets==16.0
+pytest==9.0.3
+iniconfig==2.3.0
+packaging==26.1
+pluggy==1.6.0
+Pygments==2.20.0

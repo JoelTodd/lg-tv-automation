@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import sys
+import logging
+
+
+def detail(message: str) -> None:
+    logging.getLogger("lg_tv_automation").debug(message)
 
 
 def log(message: str) -> None:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "LG TV Control"
+  short_description: "Navigate the LG TV using screenshots and remote keys"
+  default_prompt: "Use $lg-tv-control to inspect the TV and navigate its menus visually."
