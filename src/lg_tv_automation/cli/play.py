@@ -118,7 +118,11 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                 await finish_on_cancel(apply_tv_profile(tv, build_movie_profile(want_hdr=prepared[0])))
                 setup_complete = True
                 log(f"Ready in {time.monotonic() - started:.2f}s; starting mpv.")
-                result = await run_mpv(normalize_mpv_args([*(mpv_options or []), "--", str(movie)]))
+                # Decode pre-target seek frames so skipped Dolby Vision metadata
+                # cannot leave FFmpeg's RPU buffer pending and trigger warnings.
+                result = await run_mpv(normalize_mpv_args([
+                    "--hr-seek-framedrop=no", *(mpv_options or []), "--", str(movie),
+                ]))
             except asyncio.CancelledError:
                 interrupted = True
                 result = 130

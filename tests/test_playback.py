@@ -61,6 +61,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.profiles[0].label, "Blu-ray Player")
         self.assertEqual(self.profiles[-1].label, "HDMI 1")
         self.tv.__aexit__.assert_awaited_once()
+        self.assertIn("--hr-seek-framedrop=no", self.player.await_args.args[0])
         self.assertEqual(self.player.await_args.args[0][-2:], ["--", str(self.movie)])
 
     async def test_sdr_uses_sdr_profile(self):

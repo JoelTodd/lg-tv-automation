@@ -17,6 +17,11 @@ uses Filmmaker mode and Cinematic Movement, and checks the live HDMI signal.
 Startup performs no UI navigation or screenshots. Independent startup reads
 overlap, and already-satisfied settings aren't rewritten.
 
+Precise seeks decode the frames leading up to the target instead of skipping
+their decoding (`hr-seek-framedrop=no`). This avoids misleading FFmpeg Dolby
+Vision RPU warnings during seeking, at the cost of slightly slower precise
+seeks. Hardware decoding and normal playback are unaffected.
+
 Ctrl-C and SIGTERM stop/reap mpv before bounded restoration and disconnect.
 Partial preparation failures roll back the display; cleanup returns to HDMI 1.
 Concurrent playback or Codex maintenance sessions are refused. A hard kill or
