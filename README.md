@@ -15,7 +15,14 @@ starts mpv, then restores the desktop when playback exits. It preserves the
 desktop refresh rate, classifies the input as Blu-ray for movie processing,
 uses Filmmaker mode and Cinematic Movement, and checks the live HDMI signal.
 Startup performs no UI navigation or screenshots. Independent startup reads
-overlap, and already-satisfied settings aren't rewritten.
+overlap after the media probe succeeds. Already-satisfied picture/display
+settings aren't rewritten; hidden HDMI writes remain necessary because their
+visible state cannot be reliably read through the API.
+
+Playback explicitly uses NVIDIA's `nvdec` decoder. Automatic selection chose
+Vulkan Video after the update, and repeated SDR tests stalled during player
+shutdown. The playback-only option preserves Vulkan rendering and HDR; it
+doesn't change the user's global mpv configuration.
 
 Precise seeks decode the frames leading up to the target instead of skipping
 their decoding (`hr-seek-framedrop=no`). This avoids misleading FFmpeg Dolby
@@ -23,7 +30,8 @@ Vision RPU warnings during seeking, at the cost of slightly slower precise
 seeks. Hardware decoding and normal playback are unaffected.
 
 Ctrl-C and SIGTERM stop/reap mpv before bounded restoration and disconnect.
-Partial preparation failures roll back the display; cleanup returns to HDMI 1.
+Partial preparation failures roll back the display. Cleanup returns to HDMI 1
+after TV preparation has started; earlier failures leave the TV input untouched.
 Concurrent playback or Codex maintenance sessions are refused. A hard kill or
 lost TV connection cannot guarantee restoration.
 
@@ -33,7 +41,7 @@ Requires Python 3.11+, `mpv`, `ffprobe`, and `kscreen-doctor` on PATH:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pip install -c constraints-tested.txt -e '.[dev]'
 scripts/install-command-links.sh
 ```
 
@@ -58,12 +66,29 @@ Its private remote transport supplies screenshots and single actions; Codex
 chooses and verifies the steps. There are no scripted menu routes or pixel
 detectors, and no additional public commands, preset/status modes, or UI flags.
 
-Direct TV API acknowledgments don't prove visible hidden-toggle state. Picture
-mode/TruMotion failures are reported as degraded playback; input or live-signal
-failures stop playback. Ask Codex for visual diagnosis when necessary.
+Direct TV API acknowledgments don't prove visible hidden-toggle state. Earlier
+picture-mode/TruMotion failures are reported as degraded playback; input,
+live-signal or final profile verification failures stop playback. The completed
+profile's picture mode is checked again, with one repair if needed. Ask Codex
+for visual diagnosis when necessary.
 
 Tests: `.venv/bin/pytest -q`. For developer latency checks, see
 [docs/playback-latency.md](docs/playback-latency.md).
+
+After a system Python update, refresh the existing environment and reinstall
+the project with its tested dependency versions:
+
+```bash
+python3 -m venv --upgrade .venv
+.venv/bin/python -m pip install -c constraints-tested.txt -e '.[dev]'
+.venv/bin/python -m pip check
+.venv/bin/pytest -q
+```
+
+Workstation validation and remaining limits are recorded in
+[docs/workstation-validation.md](docs/workstation-validation.md).
+The detailed [behavior audit](docs/behavior-audit.md) records side-effect fixes,
+retained safeguards and longer playback/cancellation checks.
 
 MIT licensed. Local TV configuration, pairing credentials and screenshots must
 not be committed.

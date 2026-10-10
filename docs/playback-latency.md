@@ -12,6 +12,15 @@ entry point; the public command still takes only one movie path. It uses a
 private temporary IPC socket, tracks mpv launch and first `playback-restart`,
 collects output/decoder drop counters, and waits for normal desktop restoration.
 Readiness is an IPC measurement, not an optical first-frame measurement.
+The benchmark also records the active hardware decoder, source dimensions and
+colour parameters. Missing readiness or drop counters fail the measurement;
+missing values are not reported as zero. On failure, it prints the tail of a
+temporary mpv log, which is removed with the other benchmark artifacts.
+Timed runs override pause, idle, keep-open and file-loop options so the sample
+can finish. A run deadline allows the requested clip length plus 180 seconds
+for preparation/restoration. Interruption or timeout requests normal wrapper
+cleanup; a stuck wrapper gets 150 seconds before its private process group is
+killed. A forced kill cannot guarantee hardware restoration.
 
 ## Prior real-device measurements
 
@@ -33,9 +42,13 @@ state capture took 85.27s after a navigation timeout/retry. Those paths and
 their public flags are gone, not just disabled. Visual maintenance is now an
 explicit Codex task outside normal playback.
 
-Startup overlaps TV connection, display capture and one HDR metadata probe.
+Startup probes media before connecting to the TV, then overlaps TV connection
+and display capture. This prevents invalid media from triggering pairing or
+input changes.
 TV writes remain ordered, with conservative one-second settling waits after
 each hidden HDMI batch. Picture-mode and TruMotion changes are skipped when
-already satisfied. No screenshot, debug snapshot or fixed UI-button route is
+already satisfied. The second HDMI batch is skipped when no picture/motion
+write was attempted; uncertain writes still require the second batch.
+No screenshot, debug snapshot or fixed UI-button route is
 part of playback. The installed EDID and non-PC input classification remain
 essential to this workstation's movie processing.
