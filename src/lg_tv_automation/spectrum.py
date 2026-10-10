@@ -109,8 +109,7 @@ async def capture(target: tuple[int, str], ui: PlaybackUI) -> None:
                      "--client-name=lg-tv-spectrum") as proc:
         pcm = await asyncio.wait_for(proc.stdout.readexactly(SIZE * 2), 2)
         while True:
-            ui.spectrum = analyse(pcm)
-            ui.spectrum_updated = time.monotonic()
+            ui.update_spectrum(analyse(pcm), time.monotonic())
             ui.spectrum_status = "Live"
             following = await asyncio.wait_for(proc.stdout.readexactly(HOP * 2), 2)
             pcm = pcm[HOP * 2:] + following
@@ -134,7 +133,7 @@ async def watch_spectrum(pid: int, ui: PlaybackUI) -> None:
                 if recorder is not None:
                     recorder.cancel()
                     await asyncio.gather(recorder, return_exceptions=True)
-                ui.spectrum = []
+                ui.update_spectrum([], time.monotonic())
                 current = target
                 recorder = asyncio.create_task(capture(target, ui)) if target is not None else None
             if target is None:
@@ -144,4 +143,4 @@ async def watch_spectrum(pid: int, ui: PlaybackUI) -> None:
         if recorder is not None:
             recorder.cancel()
             await asyncio.gather(recorder, return_exceptions=True)
-        ui.spectrum = []
+        ui.update_spectrum([], time.monotonic())

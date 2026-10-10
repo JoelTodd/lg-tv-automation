@@ -47,6 +47,69 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(ui.audio_levels(11), [0] * spectrum.BANDS)
 
 
+class EnvelopeTests(unittest.TestCase):
+    def make_ui(self):
+        ui = PlaybackUI(Path("movie"))
+        ui.phase = "Playback"
+        ui.values["pause"] = False
+        ui.update_spectrum([0] * spectrum.BANDS, 10)
+        ui.audio_levels(10)
+        return ui
+
+    def test_short_transient_between_frames_reaches_full_height_immediately(self):
+        ui = self.make_ui()
+        ui.update_spectrum([.9] + [0] * (spectrum.BANDS - 1), 10.01)
+        ui.update_spectrum([.1] + [0] * (spectrum.BANDS - 1), 10.02)
+        shown = ui.audio_levels(10 + 1 / 30)
+        self.assertEqual(shown, [.9] + [0] * (spectrum.BANDS - 1))
+        previous = shown[0]
+        for frame in range(2, 16):
+            now = 10 + frame / 30
+            ui.update_spectrum([0] * spectrum.BANDS, now)
+            shown = ui.audio_levels(now)
+            self.assertLess(shown[0], previous)
+            self.assertGreater(shown[0], previous * .75)
+            previous = shown[0]
+        self.assertLess(shown[0], .04)
+
+    def test_small_level_flutter_is_reduced_without_merging_frequency_bands(self):
+        ui = self.make_ui()
+        displayed = []
+        for frame in range(1, 61):
+            now = 10 + frame / 30
+            level = .55 if frame % 2 else .65
+            ui.update_spectrum([level] + [0] * (spectrum.BANDS - 1), now)
+            shown = ui.audio_levels(now)
+            self.assertEqual(shown[1:], [0] * (spectrum.BANDS - 1))
+            if frame > 10:
+                displayed.append(shown[0])
+        self.assertLess(max(displayed) - min(displayed), .025)
+
+    def test_release_depends_on_elapsed_time_not_frame_count(self):
+        results = []
+        for fps in (30, 60):
+            ui = self.make_ui()
+            ui.update_spectrum([1] * spectrum.BANDS, 10)
+            ui.audio_levels(10)
+            for frame in range(1, int(.4 * fps) + 1):
+                now = 10 + frame / fps
+                ui.update_spectrum([0] * spectrum.BANDS, now)
+                shown = ui.audio_levels(now)
+            results.append(shown)
+        for slow, fast in zip(*results):
+            self.assertAlmostEqual(slow, fast)
+        self.assertLess(results[0][0], .06)
+
+    def test_reconnect_and_delayed_redraw_do_not_replay_old_peaks(self):
+        for reconnect in (False, True):
+            ui = self.make_ui()
+            ui.update_spectrum([1] * spectrum.BANDS, 10.01)
+            if reconnect:
+                ui.update_spectrum([], 10.02)
+            ui.update_spectrum([0] * spectrum.BANDS, 11)
+            self.assertEqual(ui.audio_levels(11), [0] * spectrum.BANDS)
+
+
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovery_matches_player_pid_and_explicit_sink_monitor(self):
         inputs = [

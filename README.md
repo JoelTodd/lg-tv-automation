@@ -34,7 +34,10 @@ PulseAudio or PipeWire's PulseAudio compatibility service. No microphone,
 playback filter, or audio-routing changes are used, and no audio is saved.
 Twenty-four logarithmic bands cover 50 Hz–10 kHz on a fixed −70 to 0 dBFS scale.
 Overlapping audio windows provide about 47 measurements per second; the dashboard
-redraws at up to 30 frames per second.
+redraws at up to 30 frames per second. Bars catch transients immediately, including
+peaks between redraws, with a 140 ms exponential release to soften downward
+jitter. Smoothing uses elapsed time so its response stays consistent across
+redraw rates.
 Missing tools, unsupported audio outputs/passthrough, or an absent audio track
 leave the spectrum unavailable without blocking playback.
 

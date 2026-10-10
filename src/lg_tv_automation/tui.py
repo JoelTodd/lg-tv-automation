@@ -16,6 +16,7 @@ from .console import log_sink
 from .tui_render import clip, clock, colour_frame, dashboard, plain, shutter, wrap
 
 COUNTERS = ("frame-drop-count", "decoder-frame-drop-count", "mistimed-frame-count")
+SPECTRUM_RELEASE = .14  # Seconds: instant attack, ~95% settled after 420 ms.
 PROPERTIES = (
     "time-pos", "duration", "pause", "speed", "video-params/w", "video-params/h",
     "container-fps", "display-fps", "estimated-display-fps", "avsync",
@@ -62,6 +63,9 @@ class PlaybackUI:
         self.spectrum: list[float] = []
         self.spectrum_updated = 0.0
         self.spectrum_status = "Waiting for audio"
+        self._spectrum_peaks: list[float] = []
+        self._spectrum_display: list[float] = []
+        self._spectrum_frame_at: float | None = None
         self.peak_av: float | None = None
         self._last_sample = 0.0
         self._bad_sync_since: float | None = None
@@ -143,8 +147,27 @@ class PlaybackUI:
         else:
             self._bad_sync_since = None
 
+    def update_spectrum(self, levels: list[float], now: float) -> None:
+        # Latch peaks between redraws; never replay old peaks after a stalled or
+        # compact renderer, or after the recorder reconnects.
+        if (len(levels) != len(self._spectrum_peaks)
+                or now - self.spectrum_updated > .2
+                or self._spectrum_frame_at is None
+                or now - self._spectrum_frame_at > .2):
+            self._spectrum_peaks = list(levels)
+        else:
+            self._spectrum_peaks = [max(old, new) for old, new in zip(self._spectrum_peaks, levels)]
+        self.spectrum = levels
+        self.spectrum_updated = now
+        if not levels:
+            self._spectrum_display = []
+            self._spectrum_frame_at = None
+
     def audio_levels(self, now: float) -> list[float]:
         if not self.spectrum:
+            self._spectrum_display = []
+            self._spectrum_peaks = []
+            self._spectrum_frame_at = None
             return []
         if self.state() in ("Paused", "Seeking", "Buffering"):
             decay = max(0, 1 - (now - self.changed_at) / .25)
@@ -152,9 +175,22 @@ class PlaybackUI:
             age = now - self.spectrum_updated
             if age > 1:
                 self.spectrum_status = "Audio monitor unavailable"
+                self._spectrum_display = []
+                self._spectrum_peaks = []
+                self._spectrum_frame_at = None
                 return []
             decay = min(1, max(0, 1 - (age - .2) / .3))
-        return [value * decay for value in self.spectrum]
+        target = self._spectrum_peaks or self.spectrum
+        if len(self._spectrum_display) != len(target) or self._spectrum_frame_at is None:
+            self._spectrum_display = list(target)
+        else:
+            # Elapsed-time smoothing keeps the same feel at any redraw cadence.
+            retention = math.exp(-max(0, now - self._spectrum_frame_at) / SPECTRUM_RELEASE)
+            self._spectrum_display = [new if new >= old else new + (old - new) * retention
+                                      for old, new in zip(self._spectrum_display, target)]
+        self._spectrum_frame_at = now
+        self._spectrum_peaks = []
+        return [value * decay for value in self._spectrum_display]
 
     def alert_lines(self, now: float, width: int) -> list[str]:
         alerts = []
