@@ -22,7 +22,8 @@ def pairing_key_path() -> Path:
     target = directory / "pairing.sqlite"
     if not target.exists():
         target.touch(mode=0o600)
-        for source in (Path.cwd() / ".aiopylgtv.sqlite", Path.home() / ".aiopylgtv.sqlite"):
+        checkout = Path(__file__).resolve().parents[2]
+        for source in (checkout / ".aiopylgtv.sqlite", Path.home() / ".aiopylgtv.sqlite"):
             if source.is_file():
                 try:
                     with sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True) as old_db:
@@ -32,6 +33,8 @@ def pairing_key_path() -> Path:
                     target.unlink(missing_ok=True)
                     raise
                 break
+    if target.stat().st_mode & 0o777 != 0o600:
+        target.chmod(0o600)
     return target
 
 
