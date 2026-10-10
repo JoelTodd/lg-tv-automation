@@ -277,13 +277,13 @@ class TvController:
             "TV truMotion change failed:", "TV picture mode change failed:",
         ))]
 
-    async def _set_picture_mode(self, picture_mode: str) -> None:
-        """Apply a picture mode with bounded fallbacks across direct API paths."""
+    async def _set_picture_mode(self, picture_mode: str) -> bool:
+        """Apply a picture mode; return whether a write was needed."""
 
         assert self.client is not None
         current_picture_mode = await self._get_picture_mode()
         if current_picture_mode == picture_mode:
-            return
+            return False
 
         async def write_system_mode() -> None:
             await self._request_with_timeout(
@@ -328,7 +328,7 @@ class TvController:
                     "picture mode",
                     timeout=TV_PICTURE_MODE_VERIFY_TIMEOUT,
                 )
-                return
+                return True
             except Exception as err:
                 last_error = err
                 if index < len(attempts) - 1:
@@ -378,9 +378,12 @@ class TvController:
 
         await self._ensure_input_active()
 
+        picture_write_attempted = False
         try:
-            await self._set_picture_mode(profile.picture_mode)
+            picture_write_attempted = await self._set_picture_mode(profile.picture_mode)
         except Exception as err:
+            # A failed round trip may still have changed the TV.
+            picture_write_attempted = True
             message = f"TV picture mode change failed: {err}"
             self.failures.append(message)
             log(message)
@@ -390,6 +393,7 @@ class TvController:
             try:
                 current_motion = await self._get_picture_setting("truMotionMode")
                 if current_motion != target_motion:
+                    picture_write_attempted = True
                     async def current_app_write() -> None:
                         await self._request_with_timeout(
                             self.client.set_settings("picture", {"truMotionMode": target_motion}, current_app=True),
@@ -420,7 +424,7 @@ class TvController:
                 self.failures.append(message)
                 log(message)
 
-        if hdmi_features_applied:
+        if hdmi_features_applied and picture_write_attempted:
             try:
                 await self._apply_hidden_hdmi_state(profile.desktop_features)
             except Exception as err:

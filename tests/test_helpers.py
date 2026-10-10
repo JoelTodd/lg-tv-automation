@@ -296,8 +296,11 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         async def apply_hidden_state(_state: bool) -> None:
             events.append("hdmi")
 
-        async def set_picture_mode(_picture_mode: str) -> None:
-            events.append("picture")
+        async def set_picture_mode(_picture_mode: str) -> bool:
+            if "picture" not in events:
+                events.append("picture")
+                return True
+            return False
 
         async def request_with_timeout(awaitable, description, *, timeout=5.0):
             _ = timeout

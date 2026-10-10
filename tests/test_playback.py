@@ -324,6 +324,28 @@ class CoreTests(unittest.TestCase):
 
 
 class TvTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uncertain_picture_write_still_reapplies_hdmi_flags(self):
+        tv = TvController("tv", "HDMI_1")
+        tv.client = SimpleNamespace()
+        tv._ensure_input_active = AsyncMock()
+        tv._get_input_info = AsyncMock(return_value={"label": "Blu-ray Player", "icon": "bluray.png"})
+        tv._set_picture_mode = AsyncMock(side_effect=RuntimeError("response lost after write"))
+        tv._get_picture_setting = AsyncMock(return_value="cinemaClear")
+        tv._apply_hidden_hdmi_state = AsyncMock()
+        tv._ensure_hdmi_signal = AsyncMock(return_value=True)
+        await tv.apply_profile(play.build_movie_profile(want_hdr=False))
+        self.assertEqual(tv._apply_hidden_hdmi_state.await_count, 2)
+        self.assertTrue(tv.failures)
+
+    async def test_already_satisfied_picture_mode_sends_no_writes(self):
+        tv = TvController("tv", "HDMI_1")
+        tv.client = SimpleNamespace(set_settings=AsyncMock(), set_picture_mode=AsyncMock(), set_system_picture_mode=AsyncMock())
+        tv._get_picture_mode = AsyncMock(return_value="filmMaker")
+        self.assertIs(await tv._set_picture_mode("filmMaker"), False)
+        tv.client.set_settings.assert_not_awaited()
+        tv.client.set_picture_mode.assert_not_awaited()
+        tv.client.set_system_picture_mode.assert_not_awaited()
+
     async def test_missing_alert_id_is_not_a_successful_setting_write(self):
         tv = TvController("tv", "HDMI_1")
         tv.client = SimpleNamespace(request=AsyncMock(return_value={"returnValue": True}))
@@ -343,7 +365,7 @@ class TvTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tv.failures)
         tv.client.request.assert_not_awaited()
         tv._ensure_hdmi_signal.assert_awaited_once()
-        self.assertEqual(tv._apply_hidden_hdmi_state.await_count, 2)
+        tv._apply_hidden_hdmi_state.assert_awaited_once()
 
     async def test_short_deadline_bounds_slow_fetch(self):
         tv = TvController("tv", "HDMI_1")
