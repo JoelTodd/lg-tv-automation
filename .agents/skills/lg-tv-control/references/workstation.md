@@ -54,9 +54,12 @@ routine playback diagnosis.
 
 KScreen can report an enabled output while the TV says No Signal after HDR
 transitions. Playback verifies `hdmiSignalExist` when the TV exposes it, and
-does not launch mpv after a failed live-signal check. API picture-mode/TruMotion
-failures are logged as degraded playback; input/relabel/hidden-write/signal
-failures stop playback. Every cleanup failure produces a nonzero exit status.
+does not launch mpv after a failed live-signal check. Earlier API picture-mode/
+TruMotion failures are logged as degraded playback; input/relabel/hidden-write/
+signal and final profile verification failures stop playback. Every cleanup
+failure produces a nonzero exit status. After all profile changes, picture mode
+is checked again and repaired at most once if it drifted. Movie motion is
+reapplied in that corrected mode before the final HDMI flags and verification.
 
 On this single-output NVIDIA/Wayland stack, topology glitches can also strand
 existing desktop app windows. Diagnose separately; the wrapper does not restart

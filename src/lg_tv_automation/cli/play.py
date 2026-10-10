@@ -63,8 +63,9 @@ async def run_mpv(mpv_args: list[str]) -> int:
 async def apply_tv_profile(tv: TvController, profile: TvProfile, *, cleanup: bool = False) -> None:
     async with asyncio.timeout(90):
         await tv.apply_profile(profile)
-    # Input classification and live signal are mandatory. Picture/motion API
-    # failures remain playback warnings, but cleanup must report every failure.
+    # Input classification, live signal and final profile verification are
+    # mandatory. Earlier picture/motion API failures remain warnings, but
+    # cleanup must report every failure.
     failures = list(tv.failures) if cleanup else tv.critical_failures()
     if failures:
         raise RuntimeError("; ".join(failures))

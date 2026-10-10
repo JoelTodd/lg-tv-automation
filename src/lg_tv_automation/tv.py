@@ -272,7 +272,7 @@ class TvController:
         raise RuntimeError(f"{description} verification failed; last value was {last_value!r}")
 
     def critical_failures(self) -> list[str]:
-        """Input and signal failures abort playback; picture failures warn."""
+        """Input, signal and final-state failures abort; earlier picture failures warn."""
         return [failure for failure in self.failures if not failure.startswith((
             "TV truMotion change failed:", "TV picture mode change failed:",
         ))]
@@ -340,6 +340,36 @@ class TvController:
             raise RuntimeError(f"picture mode {picture_mode!r} failed without an explicit error")
         raise RuntimeError(str(last_error))
 
+    async def _write_tru_motion(self, target_motion: str, picture_mode: str) -> None:
+        """Write motion to the active mode, with a verified fallback."""
+        assert self.client is not None
+
+        async def current_app_write() -> None:
+            await self._request_with_timeout(
+                self.client.set_settings("picture", {"truMotionMode": target_motion}, current_app=True),
+                f"set truMotionMode to {target_motion}",
+            )
+
+        async def mode_write() -> None:
+            await self._request_with_timeout(
+                self.client.set_picture_settings(
+                    {"truMotionMode": target_motion}, picture_mode,
+                    self._settings_input_name(), current_app=True,
+                ), f"retry truMotionMode to {target_motion}",
+            )
+
+        for index, writer in enumerate((current_app_write, mode_write)):
+            try:
+                await writer()
+                await self._wait_for_value(
+                    lambda: self._get_picture_setting("truMotionMode"),
+                    lambda value: value == target_motion, "TruMotion", timeout=3.0,
+                )
+                return
+            except Exception:
+                if index == 1:
+                    raise
+
     async def apply_profile(self, profile: TvProfile) -> None:
         """Apply a TV profile and verify each direct setting that can be verified."""
 
@@ -389,36 +419,10 @@ class TvController:
             log(message)
 
         if profile.tru_motion is not None:
-            target_motion = profile.tru_motion
             try:
-                current_motion = await self._get_picture_setting("truMotionMode")
-                if current_motion != target_motion:
+                if await self._get_picture_setting("truMotionMode") != profile.tru_motion:
                     picture_write_attempted = True
-                    async def current_app_write() -> None:
-                        await self._request_with_timeout(
-                            self.client.set_settings("picture", {"truMotionMode": target_motion}, current_app=True),
-                            f"set truMotionMode to {target_motion}",
-                        )
-
-                    async def mode_write() -> None:
-                        await self._request_with_timeout(
-                            self.client.set_picture_settings(
-                                {"truMotionMode": target_motion}, profile.picture_mode,
-                                self._settings_input_name(), current_app=True,
-                            ), f"retry truMotionMode to {target_motion}",
-                        )
-
-                    for index, writer in enumerate((current_app_write, mode_write)):
-                        try:
-                            await writer()
-                            await self._wait_for_value(
-                                lambda: self._get_picture_setting("truMotionMode"),
-                                lambda value: value == target_motion, "TruMotion", timeout=3.0,
-                            )
-                            break
-                        except Exception:
-                            if index == 1:
-                                raise
+                    await self._write_tru_motion(profile.tru_motion, profile.picture_mode)
             except Exception as err:
                 message = f"TV truMotion change failed: {err}"
                 self.failures.append(message)
@@ -431,6 +435,35 @@ class TvController:
                 message = f"Final HDMI/Game Optimizer state change failed: {err}"
                 self.failures.append(message)
                 log(message)
+
+        # A verified mode can slip during the remaining HDMI/profile changes.
+        # Check the completed profile, repairing at most once before reporting
+        # a failure. Keep the HDMI flags last after any corrective picture write.
+        try:
+            if await self._set_picture_mode(profile.picture_mode):
+                # Motion settings belong to each picture mode, so repair them
+                # in the corrected movie mode before reapplying HDMI flags.
+                if profile.tru_motion is not None:
+                    if await self._get_picture_setting("truMotionMode") != profile.tru_motion:
+                        await self._write_tru_motion(profile.tru_motion, profile.picture_mode)
+                if hdmi_features_applied:
+                    await self._apply_hidden_hdmi_state(profile.desktop_features)
+                await self._wait_for_value(
+                    self._get_picture_mode,
+                    lambda mode: mode == profile.picture_mode,
+                    "final picture mode",
+                    timeout=TV_PICTURE_MODE_VERIFY_TIMEOUT,
+                )
+                if profile.tru_motion is not None:
+                    await self._wait_for_value(
+                        lambda: self._get_picture_setting("truMotionMode"),
+                        lambda value: value == profile.tru_motion,
+                        "final TruMotion", timeout=3.0,
+                    )
+        except Exception as err:
+            message = f"Final TV profile verification failed: {err}"
+            self.failures.append(message)
+            log(message)
 
         try:
             await self._ensure_input_active()

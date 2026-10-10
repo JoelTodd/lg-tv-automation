@@ -23,15 +23,6 @@ from lg_tv_automation.tv import TvController
 
 
 class PlaybackTests(unittest.IsolatedAsyncioTestCase):
-    async def test_probe_failure_never_connects_or_captures(self):
-        play.detect_hdr_from_file.side_effect = RuntimeError("no video stream found")
-        self.assertEqual(await play.run_playback(self.movie), 1)
-        self.display.apply_movie_state.assert_not_called()
-        self.tv.apply_profile.assert_not_awaited()
-        self.tv.__aenter__.assert_not_awaited()
-        self.tv.__aexit__.assert_not_awaited()
-        self.display.capture.assert_not_called()
-
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -91,6 +82,15 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         play.shutil.which.return_value = None
         self.assertEqual(await play.run_playback(self.movie), 1)
         self.tv.__aenter__.assert_not_awaited()
+        self.display.capture.assert_not_called()
+
+    async def test_probe_failure_never_connects_or_captures(self):
+        play.detect_hdr_from_file.side_effect = RuntimeError("no video stream found")
+        self.assertEqual(await play.run_playback(self.movie), 1)
+        self.display.apply_movie_state.assert_not_called()
+        self.tv.apply_profile.assert_not_awaited()
+        self.tv.__aenter__.assert_not_awaited()
+        self.tv.__aexit__.assert_not_awaited()
         self.display.capture.assert_not_called()
 
     async def test_failed_connection_disconnects_partial_client(self):
@@ -216,30 +216,6 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoreTests(unittest.TestCase):
-    def test_inactive_output_is_rejected_before_display_writes(self):
-        for state in ({"connected": False}, {"enabled": False}, {"currentModeId": None}):
-            with self.subTest(state=state):
-                display = DisplayController("HDMI-A-1")
-                output = {"currentModeId": "14", "hdr": False, "wcg": False, **state}
-                with patch("lg_tv_automation.display.load_display_output", return_value=output), patch("lg_tv_automation.display.run_command") as command:
-                    with self.assertRaises(RuntimeError):
-                        display.capture()
-                command.assert_not_called()
-                self.assertIsNone(display.saved_state)
-
-    def test_media_probe_excludes_attached_cover_art(self):
-        with patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout='{"streams": []}')) as command:
-            with self.assertRaisesRegex(RuntimeError, "no video stream found"):
-                probe_media(Path("audio-with-cover.m4a"))
-        args = command.call_args.args[0]
-        self.assertEqual(args[args.index("-select_streams") + 1], "V:0")
-
-    def test_bad_metadata_shape_is_a_friendly_probe_error(self):
-        for data in ([], {"streams": [None]}, {"streams": {"pix_fmt": "yuv420p"}}):
-            with self.subTest(data=data), patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout=json.dumps(data))):
-                with self.assertRaisesRegex(RuntimeError, "Cannot determine video format"):
-                    probe_media(Path("bad.mkv"))
-
     def test_cli_has_one_required_path_and_no_legacy_modes(self):
         with patch.object(sys, "argv", ["lg-tv-play", "a movie.mkv"]):
             self.assertEqual(play.parse_args().movie, Path("a movie.mkv"))
@@ -288,6 +264,19 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Cannot determine video format: tool missing"):
                 detect_hdr_from_file(Path("unused"))
 
+    def test_media_probe_excludes_attached_cover_art(self):
+        with patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout='{"streams": []}')) as command:
+            with self.assertRaisesRegex(RuntimeError, "no video stream found"):
+                probe_media(Path("audio-with-cover.m4a"))
+        args = command.call_args.args[0]
+        self.assertEqual(args[args.index("-select_streams") + 1], "V:0")
+
+    def test_bad_metadata_shape_is_a_friendly_probe_error(self):
+        for data in ([], {"streams": [None]}, {"streams": {"pix_fmt": "yuv420p"}}):
+            with self.subTest(data=data), patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout=json.dumps(data))):
+                with self.assertRaisesRegex(RuntimeError, "Cannot determine video format"):
+                    probe_media(Path("bad.mkv"))
+
     def test_display_noop_performs_no_writes_or_waits(self):
         output = {"name": "HDMI-A-1", "currentModeId": "14", "hdr": False, "wcg": False}
         display = DisplayController("HDMI-A-1")
@@ -303,6 +292,17 @@ class CoreTests(unittest.TestCase):
             display.capture()
             display.apply_movie_state(enable_hdr=False)
         load.assert_called_once()
+
+    def test_inactive_output_is_rejected_before_display_writes(self):
+        for state in ({"connected": False}, {"enabled": False}, {"currentModeId": None}):
+            with self.subTest(state=state):
+                display = DisplayController("HDMI-A-1")
+                output = {"currentModeId": "14", "hdr": False, "wcg": False, **state}
+                with patch("lg_tv_automation.display.load_display_output", return_value=output), patch("lg_tv_automation.display.run_command") as command:
+                    with self.assertRaises(RuntimeError):
+                        display.capture()
+                command.assert_not_called()
+                self.assertIsNone(display.saved_state)
 
     def test_failed_setup_restores_original_hdr_not_desktop_default(self):
         display = DisplayController("HDMI-A-1")
@@ -325,6 +325,109 @@ class CoreTests(unittest.TestCase):
 
 
 class TvTests(unittest.IsolatedAsyncioTestCase):
+    async def test_movie_mode_repair_restores_motion_in_the_corrected_mode(self):
+        tv = TvController("tv", "HDMI_1")
+        mode, motion, hdmi_calls = "normal", "off", 0
+
+        async def read_mode():
+            return mode
+
+        async def write_setting(_category, settings, **_kwargs):
+            nonlocal mode, motion
+            if "pictureMode" in settings:
+                mode, motion = settings["pictureMode"], "off"
+            else:
+                motion = settings["truMotionMode"]
+
+        async def read_motion(_key):
+            return motion
+
+        async def hidden_state(_enabled):
+            nonlocal mode, hdmi_calls
+            hdmi_calls += 1
+            if hdmi_calls == 2:
+                mode = "normal"
+
+        async def verify(fetcher, predicate, description, **_kwargs):
+            value = await fetcher()
+            if not predicate(value):
+                raise RuntimeError(f"{description} verification failed: {value}")
+            return value
+
+        tv.client = SimpleNamespace(set_settings=AsyncMock(side_effect=write_setting))
+        tv._ensure_input_active = AsyncMock()
+        tv._get_input_info = AsyncMock(return_value={"label": "Blu-ray Player", "icon": "bluray.png"})
+        tv._get_picture_mode = AsyncMock(side_effect=read_mode)
+        tv._get_picture_setting = AsyncMock(side_effect=read_motion)
+        tv._apply_hidden_hdmi_state = AsyncMock(side_effect=hidden_state)
+        tv._wait_for_value = AsyncMock(side_effect=verify)
+        tv._ensure_hdmi_signal = AsyncMock()
+
+        await play.apply_tv_profile(tv, play.build_movie_profile(want_hdr=False))
+        self.assertEqual((mode, motion), ("filmMaker", "cinemaClear"))
+        self.assertFalse(tv.failures)
+        self.assertEqual(hdmi_calls, 3)
+        self.assertEqual(tv.client.set_settings.await_count, 4)
+
+    async def test_completed_profile_repairs_picture_mode_drift_once(self):
+        for persistent_drift in (False, True):
+            with self.subTest(persistent_drift=persistent_drift):
+                tv = TvController("tv", "HDMI_1")
+                mode = "filmMaker"
+                hdmi_calls = 0
+
+                async def read_mode():
+                    return mode
+
+                async def write_mode(_category, settings, **_kwargs):
+                    nonlocal mode
+                    mode = settings["pictureMode"]
+
+                async def hidden_state(_enabled):
+                    nonlocal mode, hdmi_calls
+                    hdmi_calls += 1
+                    if hdmi_calls == 2 or (persistent_drift and hdmi_calls == 3):
+                        mode = "filmMaker"
+
+                async def verify(fetcher, predicate, description, **_kwargs):
+                    value = await fetcher()
+                    if not predicate(value):
+                        raise RuntimeError(f"{description} verification failed: {value}")
+                    return value
+
+                tv.client = SimpleNamespace(set_settings=AsyncMock(side_effect=write_mode))
+                tv._ensure_input_active = AsyncMock()
+                tv._get_input_info = AsyncMock(return_value={"label": "HDMI 1", "icon": "HDMI_1.png"})
+                tv._get_picture_mode = AsyncMock(side_effect=read_mode)
+                tv._apply_hidden_hdmi_state = AsyncMock(side_effect=hidden_state)
+                tv._wait_for_value = AsyncMock(side_effect=verify)
+                tv._ensure_hdmi_signal = AsyncMock()
+
+                if persistent_drift:
+                    with self.assertRaisesRegex(RuntimeError, "Final TV profile verification failed"):
+                        await play.apply_tv_profile(tv, play.build_desktop_profile(), cleanup=True)
+                else:
+                    await play.apply_tv_profile(tv, play.build_desktop_profile(), cleanup=True)
+                    self.assertEqual(mode, "expert1")
+                    self.assertFalse(tv.failures)
+                self.assertEqual(hdmi_calls, 3)
+                self.assertEqual(tv.client.set_settings.await_count, 2)
+
+    async def test_missing_alert_id_is_not_a_successful_setting_write(self):
+        tv = TvController("tv", "HDMI_1")
+        tv.client = SimpleNamespace(request=AsyncMock(return_value={"returnValue": True}))
+        with self.assertRaisesRegex(RuntimeError, "no alertId"):
+            await tv._alert_luna("luna://test", {})
+
+    async def test_already_satisfied_picture_mode_sends_no_writes(self):
+        tv = TvController("tv", "HDMI_1")
+        tv.client = SimpleNamespace(set_settings=AsyncMock(), set_picture_mode=AsyncMock(), set_system_picture_mode=AsyncMock())
+        tv._get_picture_mode = AsyncMock(return_value="filmMaker")
+        self.assertIs(await tv._set_picture_mode("filmMaker"), False)
+        tv.client.set_settings.assert_not_awaited()
+        tv.client.set_picture_mode.assert_not_awaited()
+        tv.client.set_system_picture_mode.assert_not_awaited()
+
     async def test_uncertain_picture_write_still_reapplies_hdmi_flags(self):
         tv = TvController("tv", "HDMI_1")
         tv.client = SimpleNamespace()
@@ -337,21 +440,6 @@ class TvTests(unittest.IsolatedAsyncioTestCase):
         await tv.apply_profile(play.build_movie_profile(want_hdr=False))
         self.assertEqual(tv._apply_hidden_hdmi_state.await_count, 2)
         self.assertTrue(tv.failures)
-
-    async def test_already_satisfied_picture_mode_sends_no_writes(self):
-        tv = TvController("tv", "HDMI_1")
-        tv.client = SimpleNamespace(set_settings=AsyncMock(), set_picture_mode=AsyncMock(), set_system_picture_mode=AsyncMock())
-        tv._get_picture_mode = AsyncMock(return_value="filmMaker")
-        self.assertIs(await tv._set_picture_mode("filmMaker"), False)
-        tv.client.set_settings.assert_not_awaited()
-        tv.client.set_picture_mode.assert_not_awaited()
-        tv.client.set_system_picture_mode.assert_not_awaited()
-
-    async def test_missing_alert_id_is_not_a_successful_setting_write(self):
-        tv = TvController("tv", "HDMI_1")
-        tv.client = SimpleNamespace(request=AsyncMock(return_value={"returnValue": True}))
-        with self.assertRaisesRegex(RuntimeError, "no alertId"):
-            await tv._alert_luna("luna://test", {})
 
     async def test_profile_is_api_only_and_checks_live_signal(self):
         tv = TvController("tv", "HDMI_1")
