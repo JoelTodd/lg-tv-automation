@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -219,6 +221,18 @@ class HelperTests(unittest.TestCase):
 
 
 class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_library_retry_diagnostics_do_not_pollute_json_stdout(self):
+        controller = TvController("203.0.113.10", "HDMI_1")
+        async def noisy_operation():
+            print("Connection attempt: 2")
+        client = SimpleNamespace(connect=AsyncMock(side_effect=noisy_operation))
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors), patch("lg_tv_automation.tv.WebOsClient.create", new=AsyncMock(return_value=client)), patch("lg_tv_automation.tv.pairing_key_path", return_value=Path("/tmp/test-only.sqlite")):
+            await controller.__aenter__()
+            await controller._request_with_timeout(noisy_operation(), "test request")
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue().count("Connection attempt: 2"), 2)
+
     async def test_tv_connect_timeout_mentions_pairing_prompt(self) -> None:
         controller = TvController("203.0.113.10", "HDMI_1")
         fake_client = SimpleNamespace(connect=AsyncMock(side_effect=TimeoutError), disconnect=AsyncMock())

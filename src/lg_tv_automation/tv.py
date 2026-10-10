@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import redirect_stdout
+import sys
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -40,8 +42,11 @@ class TvController:
         try:
             async with asyncio.timeout(TV_CONNECT_TIMEOUT):
                 key_path = await asyncio.to_thread(pairing_key_path)
-                self.client = await WebOsClient.create(self.ip, key_file_path=str(key_path), states=[])
-                await self.client.connect()
+                # Library connection retries print plain text. Keep those
+                # diagnostics out of the remote transport's JSON stdout.
+                with redirect_stdout(sys.stderr):
+                    self.client = await WebOsClient.create(self.ip, key_file_path=str(key_path), states=[])
+                    await self.client.connect()
         except TimeoutError as err:
             raise RuntimeError(
                 "TV connection timed out. Check for a pairing prompt on the TV."
@@ -82,7 +87,8 @@ class TvController:
         """Bound TV round trips so the CLI cannot hang forever on a missing reply."""
 
         try:
-            return await asyncio.wait_for(awaitable, timeout=timeout)
+            with redirect_stdout(sys.stderr):
+                return await asyncio.wait_for(awaitable, timeout=timeout)
         except TimeoutError as err:
             raise RuntimeError(f"Timed out waiting for TV response while trying to {description}.") from err
 
