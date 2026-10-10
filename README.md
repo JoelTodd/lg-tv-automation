@@ -19,6 +19,38 @@ overlap after the media probe succeeds. Already-satisfied picture/display
 settings aren't rewritten; hidden HDMI writes remain necessary because their
 visible state cannot be reliably read through the API.
 
+In an interactive terminal, a dashboard fills an 80×24 window and adapts to
+resizing. It shows playback position, video size/frame rate and HDR/SDR, display
+refresh, setup time, and an audio spectrum. A short shutter reveal opens the
+screen, with a consistent violet border. The timeline is cyan up to the playhead
+and muted grey for the remaining time. Setup/restoration show their actual steps. After
+restoration, a brief closing shutter gives way to the session log; failures and
+interruptions skip this final animation. `NO_COLOR` disables colour. Small
+terminals use a compact layout.
+
+The spectrum uses optional `pactl` and `parec` tools (Fedora's
+`pulseaudio-utils`) to monitor only this mpv process's output stream through
+PulseAudio or PipeWire's PulseAudio compatibility service. No microphone,
+playback filter, or audio-routing changes are used, and no audio is saved.
+Twenty-four logarithmic bands cover 50 Hz–10 kHz on a fixed −70 to 0 dBFS scale.
+Overlapping audio windows provide about 47 measurements per second; the dashboard
+redraws at up to 30 frames per second.
+Missing tools, unsupported audio outputs/passthrough, or an absent audio track
+leave the spectrum unavailable without blocking playback.
+
+A single alert line surfaces errors or abnormal playback conditions; full
+details go to the exit log. Routine A/V values, zero-drop counters, fixed profile
+settings, and successful checks are omitted from the dashboard. mpv's terminal
+shortcuts remain available. Telemetry doesn't poll the TV or display.
+
+After exit, a spaced session report remains in terminal scrollback, grouped into
+timing, media, and diagnostics. It records the result, last position, aggregate
+setup/playback/restore timings, and any warnings or errors. Nonzero frame totals
+account for counter resets; large A/V offsets are reported as exceptions.
+Failures also include individual step timings. Repeated diagnostics are counted;
+the latest 200 entries and latest error are retained, with omissions noted.
+Redirected stderr and `TERM=dumb` use plain logs and a timing/exit summary.
+
 Playback explicitly uses NVIDIA's `nvdec` decoder. Automatic selection chose
 Vulkan Video after the update, and repeated SDR tests stalled during player
 shutdown. The playback-only option preserves Vulkan rendering and HDR; it

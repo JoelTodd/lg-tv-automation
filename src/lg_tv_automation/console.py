@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import sys
+from contextvars import ContextVar
+from collections.abc import Callable
+
+
+log_sink: ContextVar[Callable[[str], None] | None] = ContextVar("log_sink", default=None)
 
 
 def log(message: str) -> None:
-    """Emit a stable stderr prefix so command output remains easy to scan."""
+    """Route diagnostics to the dashboard or emit a stable stderr prefix."""
 
-    print(f"[lg-tv-play] {message}", file=sys.stderr)
+    sink = log_sink.get()
+    if sink is not None:
+        sink(message)
+    else:
+        print(f"[lg-tv-play] {message}", file=sys.stderr)
