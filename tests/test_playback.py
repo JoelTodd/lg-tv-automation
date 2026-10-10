@@ -213,6 +213,13 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoreTests(unittest.TestCase):
+    def test_media_probe_excludes_attached_cover_art(self):
+        with patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout='{"streams": []}')) as command:
+            with self.assertRaisesRegex(RuntimeError, "no video stream found"):
+                probe_media(Path("audio-with-cover.m4a"))
+        args = command.call_args.args[0]
+        self.assertEqual(args[args.index("-select_streams") + 1], "V:0")
+
     def test_bad_metadata_shape_is_a_friendly_probe_error(self):
         for data in ([], {"streams": [None]}, {"streams": {"pix_fmt": "yuv420p"}}):
             with self.subTest(data=data), patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout=json.dumps(data))):

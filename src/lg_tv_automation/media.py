@@ -35,7 +35,7 @@ def normalize_mpv_args(arguments: list[str]) -> list[str]:
 def probe_media(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(run_command([
-            "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+            "ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries",
             "stream=color_transfer,color_primaries,pix_fmt:stream_side_data=side_data_type",
             "-of", "json", str(path),
         ], timeout=8).stdout)
