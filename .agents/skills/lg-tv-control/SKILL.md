@@ -33,8 +33,11 @@ before choosing the next action. The transport does not infer focus or settings.
 ```
 
 These are separate requests, not a scripted route. Supported keys: UP, DOWN,
-LEFT, RIGHT, ENTER, BACK, EXIT, HOME, MENU, QMENU, ADVANCE_SETTING. Optional
-`settle` is 0–3 seconds, default 0.35 after a button and 0.8 after launch.
+LEFT, RIGHT, ENTER, BACK, MENU, QMENU, ADVANCE_SETTING. HOME and EXIT are refused
+because they can send this workstation's user to the TV home menu.
+Launch requests are limited to Game Optimizer and HDMI inputs; arbitrary apps,
+including TV home, are refused.
+Optional `settle` is 0–3 seconds, default 0.35 after a button and 0.8 after launch.
 If an image is mid-transition, request another observation with `settle: 0.5`.
 
 ## Navigate and verify
@@ -42,7 +45,8 @@ If an image is mid-transition, request another observation with `settle: 0.5`.
 - Choose actions from visible labels and focus in the latest image. Do not use
   remembered menu offsets, color thresholds, fixed counts or blind key batches.
 - If focus is unclear, use a single directional key and compare fresh images.
-  If stuck, BACK or EXIT and re-observe; do not repeatedly toggle a control.
+  If stuck, BACK and re-observe; do not repeatedly toggle a control. If needed,
+  launch HDMI 1 directly rather than opening the TV home menu.
 - Before changing a setting, record its visible original value. Change only
   settings needed for the user's request, then verify their displayed value.
   Read-only inspection must not temporarily enable Game Optimizer to reveal
@@ -54,14 +58,23 @@ If an image is mid-transition, request another observation with `settle: 0.5`.
 - The workstation is visible through HDMI 1. Do not change network, pairing,
   firmware, reset settings or HDMI source unless specifically requested.
 - If a diagnostic requires temporary changes, restore each original value and
-  visually verify it before ending. Session cleanup closes overlays and returns
-  to HDMI 1, but does **not** restore settings you changed.
+  visually verify it before ending. Session cleanup returns to HDMI 1, but does
+  **not** restore settings you changed or infer whether an overlay is open.
 
-Always send `quit` and wait for `event: closed`. On EOF, SIGINT, SIGTERM or 120
+Before quitting after navigation, close visible settings overlays with single
+BACK actions and verify the bare HDMI screen. The transport cannot infer whether
+an overlay is still open, and launching HDMI alone may leave settings visible.
+Always send `quit` and wait for `event: closed`. Observation-only sessions send
+no cleanup keys and leave the current screen/input untouched. Once navigation
+has been attempted, cleanup checks the input and launches HDMI 1 only if needed;
+it never sends a blanket EXIT key, which can open the TV home menu. On EOF,
+SIGINT, SIGTERM or 120
 seconds idle, the session attempts the same bounded cleanup. A hard kill cannot
 guarantee cleanup. The session owns the same exclusive lock as `lg-tv-play`:
 quit before running playback, and do not bypass the lock during playback.
-Screenshots remain in a private per-session state directory; don't publish them.
+Interrupted sessions may leave a settings overlay open; reconnect and close it
+visually if needed. Screenshots remain in a private per-session state directory;
+don't publish them.
 
 ## Playback boundary
 

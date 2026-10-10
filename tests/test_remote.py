@@ -23,7 +23,11 @@ class RequestTests(unittest.TestCase):
         invalid = [
             None, [], {}, {"op": []}, {"op": "request", "uri": "settings/set"},
             {"op": "button", "key": "POWER"}, {"op": "button", "key": []},
+            {"op": "button", "key": "HOME"}, {"op": "button", "key": "EXIT"},
             {"op": "button", "key": "ENTER", "count": 5},
+            {"op": "launch", "app": "com.webos.app.home"},
+            {"op": "launch", "app": "com.webos.app.launcher"},
+            {"op": "launch", "app": "arbitrary.app"},
             {"op": "launch", "app": ""}, {"op": "launch", "app": "has spaces"},
             {"op": "launch", "app": []}, {"op": "observe", "settle": -1},
             {"op": "observe", "settle": 4}, {"op": "observe", "settle": True},
@@ -84,9 +88,10 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
             launch_app=AsyncMock(return_value=True),
             get_current_app=AsyncMock(return_value=tv.input_app_id),
             request=AsyncMock(return_value={"imageUri": "http://tv/screen"}),
+            disconnect=AsyncMock(),
         )
         tv.__aenter__ = AsyncMock(return_value=tv)
-        tv.__aexit__ = AsyncMock()
+        tv.__aexit__ = AsyncMock(side_effect=tv.__aexit__)
         return tv
 
     async def test_action_then_observation_and_no_heuristics(self):
@@ -132,12 +137,12 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
         tv.client.button.assert_awaited_once()
         session.observe.assert_not_awaited()
 
-    async def run_mock_session(self, reader, tv):
+    async def run_mock_session(self, reader, tv, *, observe_error=None):
         import tempfile
-        with tempfile.TemporaryDirectory() as directory, patch.dict(remote.os.environ, {"XDG_STATE_HOME": directory}), patch.object(remote, "require_tv_ip", return_value="tv"), patch.object(remote, "TvController", return_value=tv), patch.object(remote.RemoteSession, "observe", new=AsyncMock(return_value={"screenshot": "/unused.png"})):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(remote.os.environ, {"XDG_STATE_HOME": directory}), patch.object(remote, "require_tv_ip", return_value="tv"), patch.object(remote, "TvController", return_value=tv), patch.object(remote.RemoteSession, "observe", new=AsyncMock(return_value={"screenshot": "/unused.png"}, side_effect=observe_error)):
             return await remote.run_session(argparse.Namespace(input="HDMI_1", idle_timeout=.01), reader)
 
-    async def test_quit_and_eof_close_overlay_disconnect_and_report_return(self):
+    async def test_observation_only_quit_and_eof_do_not_change_screen(self):
         for lines in [b'{"op":"quit"}\n', b'']:
             with self.subTest(lines=lines):
                 reader = asyncio.StreamReader()
@@ -146,10 +151,28 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
                 tv = self.make_tv()
                 with contextlib.redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(await self.run_mock_session(reader, tv), 0)
-                tv.client.button.assert_awaited_once_with("EXIT")
+                tv.client.button.assert_not_awaited()
+                tv.client.launch_app.assert_not_awaited()
+                self.assertFalse(tv.return_to_input)
                 tv.__aexit__.assert_awaited_once()
                 events = [json.loads(line) for line in output.getvalue().splitlines()]
                 self.assertEqual(events[-1]["event"], "closed")
+                self.assertIsNone(events[-1]["returned_to"])
+
+    async def test_navigation_on_hdmi_does_not_relaunch_it_on_quit_or_eof(self):
+        for ending in [b'{"op":"quit"}\n', b'']:
+            with self.subTest(ending=ending):
+                reader = asyncio.StreamReader()
+                reader.feed_data(b'{"op":"button","key":"ADVANCE_SETTING","settle":0}\n' + ending)
+                reader.feed_eof()
+                tv = self.make_tv()
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(await self.run_mock_session(reader, tv), 0)
+                tv.client.button.assert_awaited_once_with("ADVANCE_SETTING")
+                tv.client.launch_app.assert_not_awaited()
+                self.assertTrue(tv.return_to_input)
+                tv.__aexit__.assert_awaited_once()
+                self.assertEqual(json.loads(output.getvalue().splitlines()[-1])["returned_to"], tv.input_app_id)
 
     async def test_idle_timeout_cleans_up(self):
         reader = asyncio.StreamReader()
@@ -157,6 +180,8 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             await self.run_mock_session(reader, tv)
         self.assertIn('"event": "idle_timeout"', output.getvalue())
+        tv.client.button.assert_not_awaited()
+        self.assertFalse(tv.return_to_input)
         tv.__aexit__.assert_awaited_once()
 
     async def test_invalid_json_and_requests_are_rejected_before_actions(self):
@@ -166,17 +191,44 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
         tv = self.make_tv()
         with contextlib.redirect_stdout(io.StringIO()) as output:
             await self.run_mock_session(reader, tv)
-        # Only cleanup sends a button; no malformed input reaches the TV.
-        tv.client.button.assert_awaited_once_with("EXIT")
+        tv.client.button.assert_not_awaited()
         self.assertEqual(sum(not json.loads(line)["ok"] for line in output.getvalue().splitlines()), 2)
 
-    async def test_disconnect_even_if_exit_button_fails(self):
+    async def test_disconnect_even_if_direct_input_launch_fails(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b'{"op":"launch","app":"com.webos.app.gameoptimizer","settle":0}\n')
+        reader.feed_eof()
+        tv = self.make_tv()
+        tv.client.launch_app.side_effect = RuntimeError("launch failed")
+        tv.client.get_current_app.return_value = "com.webos.app.gameoptimizer"
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "launch failed"):
+            await self.run_mock_session(reader, tv)
+        tv.__aexit__.assert_awaited_once()
+        tv.client.disconnect.assert_awaited_once()
+
+    async def test_failed_navigation_response_still_restores_input(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b'{"op":"launch","app":"com.webos.app.gameoptimizer","settle":0}\n')
+        reader.feed_eof()
+        tv = self.make_tv()
+        tv.client.launch_app.side_effect = [RuntimeError("response lost"), True]
+        tv.client.get_current_app.side_effect = ["com.webos.app.gameoptimizer", tv.input_app_id]
+        with contextlib.redirect_stdout(io.StringIO()):
+            await self.run_mock_session(reader, tv)
+        tv.client.button.assert_not_awaited()
+        self.assertEqual(tv.client.launch_app.await_args_list[-1].args, (tv.input_app_id,))
+        self.assertTrue(tv.return_to_input)
+        tv.__aexit__.assert_awaited_once()
+
+    async def test_failed_initial_capture_disconnects_without_exit(self):
         reader = asyncio.StreamReader()
         reader.feed_eof()
         tv = self.make_tv()
-        tv.client.button.side_effect = RuntimeError("exit failed")
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "exit failed"):
-            await self.run_mock_session(reader, tv)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            await self.run_mock_session(reader, tv, observe_error=RuntimeError("capture failed"))
+        self.assertIn("capture failed", output.getvalue())
+        tv.client.button.assert_not_awaited()
+        self.assertFalse(tv.return_to_input)
         tv.__aexit__.assert_awaited_once()
 
     async def test_cancellation_during_action_still_cleans_up(self):
@@ -195,8 +247,34 @@ class RemoteTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        self.assertEqual(tv.client.button.await_args_list[-1].args, ("EXIT",))
+        tv.client.button.assert_awaited_once_with("DOWN")
+        tv.client.launch_app.assert_not_awaited()
         tv.__aexit__.assert_awaited_once()
+
+    async def test_cancellation_during_disconnect_waits_and_is_not_success(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b'{"op":"quit"}\n')
+        reader.feed_eof()
+        tv = self.make_tv()
+        started, release = asyncio.Event(), asyncio.Event()
+        async def disconnect():
+            started.set()
+            await release.wait()
+        tv.client.disconnect.side_effect = disconnect
+        with contextlib.redirect_stdout(io.StringIO()):
+            task = asyncio.create_task(self.run_mock_session(reader, tv))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+        tv.client.disconnect.assert_awaited_once()
 
     async def test_exclusive_session_lock_is_the_playback_lock(self):
         import tempfile

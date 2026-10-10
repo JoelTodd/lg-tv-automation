@@ -17,10 +17,12 @@ persistent terminal (`tty: true`). Read the initial
 | `{"op":"observe"}` | Screenshot and current app; no remote action |
 | `{"op":"button","key":"DOWN"}` | One key, then screenshot |
 | `{"op":"launch","app":"com.webos.app.gameoptimizer"}` | Launch app, then screenshot |
-| `{"op":"quit"}` | Close overlays, verify return input, disconnect, release lock |
+| `{"op":"quit"}` | Disconnect and release lock; after navigation, verify HDMI and return only if needed |
 
 Allowed keys are navigation/settings keys, not power, volume, factory reset or
-arbitrary API writes. Optional `settle` is 0–3 seconds. Default wait is 0.35s
+arbitrary API writes. HOME and EXIT are refused to avoid sending the user to the
+TV home menu. Launches accept only Game Optimizer and HDMI inputs, closing the
+remaining route to launch TV home as an app. Optional `settle` is 0–3 seconds. Default wait is 0.35s
 after keys, 0.8s after launch, zero for observation. These are small capture
 delays, not claims that a page has finished loading. Inspect the image and
 observe again when it is still transitioning.
@@ -47,8 +49,17 @@ playback. No external model service or credentials are added.
 
 The remote session holds the exclusive playback lock. No `lg-tv-play` run can
 change the display/profile beneath it. Close the remote before playback.
-EOF, quit, idle expiration and normal signals attempt EXIT, verify the return
-input, and disconnect, including on failures. Cleanup is bounded to 20s and
+Observation-only sessions disconnect without sending EXIT or changing input.
+EXIT on a bare HDMI screen can open the TV's home menu. Their `closed` event has
+`returned_to: null`, since no input restoration was needed.
+
+After an attempted button/launch, EOF, quit, idle expiration and normal signals
+check the active app, launch HDMI only when needed, verify it, and disconnect,
+including on failures. Already-active HDMI is never relaunched.
+No automatic EXIT key is sent. The agent must close visible settings overlays
+before quitting, using single BACK actions and fresh screenshots. Launching HDMI
+does not reliably dismiss settings overlays; interrupted sessions may leave one
+open for the next visual maintenance check. Cleanup is bounded to 20s and
 failures are reported. SIGKILL, network loss and power failure cannot guarantee
 return. The transport does not restore setting values: the agent must record
 and restore any temporary changes, verifying the visible result.
@@ -72,4 +83,4 @@ This validates interactive navigation, not autonomous model execution inside
 the shell playback command or a promise that reasoning through menus is faster
 than direct APIs. Hardware-free regressions cover request validation, native
 image preservation, action/capture failures, EOF/idle/cancellation cleanup,
-disconnect after EXIT failure, and contention with the playback lock.
+disconnect after input-launch failure, and contention with the playback lock.

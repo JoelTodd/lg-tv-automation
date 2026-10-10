@@ -28,7 +28,8 @@ from .lifecycle import run_cleanup_step
 from .tv import TvController
 from .session import session_lock
 
-BUTTONS = frozenset({"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "BACK", "EXIT", "HOME", "MENU", "QMENU", "ADVANCE_SETTING"})
+BUTTONS = frozenset({"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "BACK", "MENU", "QMENU", "ADVANCE_SETTING"})
+APPS = frozenset({"com.webos.app.gameoptimizer", *(f"com.webos.app.hdmi{i}" for i in range(1, 5))})
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 
 
@@ -54,8 +55,8 @@ def validate_request(request: object) -> dict:
         raise ValueError(f"key must be one of {', '.join(sorted(BUTTONS))}.")
     if op == "launch":
         app = request.get("app")
-        if not isinstance(app, str) or not app or len(app) > 160 or any(c.isspace() for c in app):
-            raise ValueError("app must be a non-empty app id with no whitespace.")
+        if not isinstance(app, str) or app not in APPS:
+            raise ValueError("Only Game Optimizer and HDMI inputs can be launched; TV home is unavailable.")
     settle = request.get("settle", 0.35 if op == "button" else 0.8 if op == "launch" else 0)
     if isinstance(settle, bool) or not isinstance(settle, (int, float)) or not math.isfinite(settle) or not 0 <= settle <= 3:
         raise ValueError("settle must be between 0 and 3 seconds.")
@@ -104,6 +105,7 @@ class RemoteSession:
         self.tv = tv
         self.directory = directory
         self.sequence = 0
+        self.navigation_attempted = False
 
     async def observe(self) -> dict:
         assert self.tv.client is not None
@@ -120,6 +122,7 @@ class RemoteSession:
         try:
             if request["op"] in {"button", "launch"}:
                 # A transport error does not prove that the TV ignored the action.
+                self.navigation_attempted = True
                 applied = "unknown"
                 action = self.tv.client.button(request["key"]) if request["op"] == "button" else self.tv.client.launch_app(request["app"])
                 await self.tv._request_with_timeout(action, "perform remote action")
@@ -135,6 +138,7 @@ async def run_session(args: argparse.Namespace, reader: asyncio.StreamReader) ->
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory = Path(tempfile.mkdtemp(prefix="session-", dir=base))
     tv = TvController(require_tv_ip(), args.input)
+    session = None
     try:
         await tv.__aenter__()
         session = RemoteSession(tv, directory)
@@ -158,13 +162,14 @@ async def run_session(args: argparse.Namespace, reader: asyncio.StreamReader) ->
             emit(await session.execute(request))
     finally:
         async def cleanup() -> None:
-            try:
-                if tv.client is not None:
-                    await tv._request_with_timeout(tv.client.button("EXIT"), "close TV overlay")
-            finally:
-                await tv.__aexit__(None, None, None)
-        await run_cleanup_step(cleanup, "remote session cleanup", timeout=20)
-    emit({"event": "closed", "ok": True, "returned_to": tv.input_app_id})
+            # An observation-only session owns no input to restore. After
+            # navigation, __aexit__ returns to HDMI only if we actually left it.
+            # No blanket remote key or redundant input launch is needed.
+            tv.return_to_input = session is not None and session.navigation_attempted
+            await tv.__aexit__(None, None, None)
+        if await run_cleanup_step(cleanup, "remote session cleanup", timeout=20):
+            raise asyncio.CancelledError
+    emit({"event": "closed", "ok": True, "returned_to": tv.input_app_id if tv.return_to_input else None})
     return 0
 
 
