@@ -39,24 +39,28 @@ def probe_media(path: Path) -> dict[str, Any]:
             "stream=color_transfer,color_primaries,pix_fmt:stream_side_data=side_data_type",
             "-of", "json", str(path),
         ], timeout=8).stdout)
-        streams = data.get("streams") or []
-        return streams[0] if streams else {"probe_error": "no video stream found"}
-    except Exception as err:
-        return {"probe_error": f"ffprobe failed: {err}"}
+        if not isinstance(data, dict):
+            raise ValueError("invalid video metadata")
+        streams = data.get("streams", [])
+        if not isinstance(streams, list) or any(not isinstance(item, dict) for item in streams):
+            raise ValueError("invalid video stream metadata")
+        if not streams:
+            raise ValueError("no video stream found")
+        return streams[0]
+    except (RuntimeError, ValueError) as err:
+        raise RuntimeError(f"Cannot determine video format: {err}") from err
 
 
-def detect_hdr_from_file(path: Path, *, stream: dict[str, Any] | None = None) -> tuple[bool, str]:
+def detect_hdr_from_file(path: Path, *, stream: dict[str, Any] | None = None) -> bool:
     stream = probe_media(path) if stream is None else stream
-    if "probe_error" in stream:
-        return False, stream["probe_error"]
     transfer = (stream.get("color_transfer") or "").lower()
     primaries = (stream.get("color_primaries") or "").lower()
     pix_fmt = (stream.get("pix_fmt") or "").lower()
     side_types = {str(item.get("side_data_type", "")).lower() for item in stream.get("side_data_list") or []}
     if transfer in {"smpte2084", "arib-std-b67"}:
-        return True, f"transfer={transfer}"
+        return True
     if {"mastering display metadata", "content light level metadata"} & side_types:
-        return True, "HDR side-data present"
+        return True
     if primaries == "bt2020" and any(token in pix_fmt for token in ("10", "12", "16")):
-        return True, f"bt2020 + {pix_fmt}"
-    return False, f"transfer={transfer or 'unknown'} primaries={primaries or 'unknown'} pix_fmt={pix_fmt or 'unknown'}"
+        return True
+    return False

@@ -16,13 +16,22 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from lg_tv_automation.cli import play
 from lg_tv_automation.display import DisplayController, load_display_output
-from lg_tv_automation.media import detect_hdr_from_file, normalize_mpv_args, resolve_movie_path
+from lg_tv_automation.media import detect_hdr_from_file, probe_media, normalize_mpv_args, resolve_movie_path
 from lg_tv_automation.models import DisplaySnapshot
 from lg_tv_automation.process import run_command
 from lg_tv_automation.tv import TvController
 
 
 class PlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_failure_never_connects_or_captures(self):
+        play.detect_hdr_from_file.side_effect = RuntimeError("no video stream found")
+        self.assertEqual(await play.run_playback(self.movie), 1)
+        self.display.apply_movie_state.assert_not_called()
+        self.tv.apply_profile.assert_not_awaited()
+        self.tv.__aenter__.assert_not_awaited()
+        self.tv.__aexit__.assert_not_awaited()
+        self.display.capture.assert_not_called()
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -44,7 +53,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
             ("require_tv_ip", Mock(return_value="tv")),
             ("TvController", Mock(return_value=self.tv)),
             ("DisplayController", Mock(return_value=self.display)),
-            ("probe_hdr", Mock(return_value=True)),
+            ("detect_hdr_from_file", Mock(return_value=True)),
             ("run_mpv", self.player),
         ]:
             self.stack.enter_context(patch.object(play, name, value))
@@ -65,7 +74,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.player.await_args.args[0][-2:], ["--", str(self.movie)])
 
     async def test_sdr_uses_sdr_profile(self):
-        play.probe_hdr.return_value = False
+        play.detect_hdr_from_file.return_value = False
         self.assertEqual(await play.run_playback(self.movie), 0)
         self.display.apply_movie_state.assert_called_once_with(enable_hdr=False)
         self.assertEqual(self.profiles[0].picture_mode, "filmMaker")
@@ -81,13 +90,6 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await play.run_playback(self.movie), 1)
         self.tv.__aenter__.assert_not_awaited()
         self.display.capture.assert_not_called()
-
-    async def test_probe_failure_disconnects_without_changes(self):
-        play.probe_hdr.side_effect = RuntimeError("no video stream found")
-        self.assertEqual(await play.run_playback(self.movie), 1)
-        self.display.apply_movie_state.assert_not_called()
-        self.tv.apply_profile.assert_not_awaited()
-        self.tv.__aexit__.assert_awaited_once()
 
     async def test_failed_connection_disconnects_partial_client(self):
         self.tv.__aenter__.side_effect = RuntimeError("connection failed")
@@ -147,22 +149,23 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.tv.__aexit__.assert_awaited_once()
 
     async def test_read_only_preparations_overlap(self):
-        probe_started, capture_started, release = threading.Event(), threading.Event(), threading.Event()
+        probe_completed, capture_started, release = threading.Event(), threading.Event(), threading.Event()
         def probe(*_):
-            probe_started.set()
-            if not release.wait(2):
-                raise RuntimeError("TV connect did not overlap probe")
+            self.tv.__aenter__.assert_not_awaited()
+            self.display.capture.assert_not_called()
+            probe_completed.set()
             return True
         def capture():
             capture_started.set()
             if not release.wait(2):
                 raise RuntimeError("TV connect did not overlap display capture")
         async def connect():
+            self.assertTrue(probe_completed.is_set())
             async with asyncio.timeout(1):
-                while not (probe_started.is_set() and capture_started.is_set()):
+                while not capture_started.is_set():
                     await asyncio.sleep(.001)
             release.set()
-        play.probe_hdr.side_effect = probe
+        play.detect_hdr_from_file.side_effect = probe
         self.display.capture.side_effect = capture
         self.tv.__aenter__.side_effect = connect
         self.assertEqual(await play.run_playback(self.movie), 0)
@@ -210,6 +213,12 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoreTests(unittest.TestCase):
+    def test_bad_metadata_shape_is_a_friendly_probe_error(self):
+        for data in ([], {"streams": [None]}, {"streams": {"pix_fmt": "yuv420p"}}):
+            with self.subTest(data=data), patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout=json.dumps(data))):
+                with self.assertRaisesRegex(RuntimeError, "Cannot determine video format"):
+                    probe_media(Path("bad.mkv"))
+
     def test_cli_has_one_required_path_and_no_legacy_modes(self):
         with patch.object(sys, "argv", ["lg-tv-play", "a movie.mkv"]):
             self.assertEqual(play.parse_args().movie, Path("a movie.mkv"))
@@ -250,12 +259,12 @@ class CoreTests(unittest.TestCase):
             ({"color_transfer": "bt709", "pix_fmt": "yuv420p"}, False),
         ]:
             with self.subTest(stream=stream):
-                self.assertEqual(detect_hdr_from_file(Path("unused"), stream=stream)[0], hdr)
+                self.assertEqual(detect_hdr_from_file(Path("unused"), stream=stream), hdr)
 
     def test_probe_errors_are_fatal_instead_of_silent_sdr(self):
-        for reason in ["ffprobe failed: tool missing", "no video stream found"]:
-            with patch.object(play, "detect_hdr_from_file", return_value=(False, reason)), self.assertRaisesRegex(RuntimeError, "Cannot determine"):
-                play.probe_hdr(Path("unused"))
+        with patch("lg_tv_automation.media.run_command", side_effect=RuntimeError("tool missing")):
+            with self.assertRaisesRegex(RuntimeError, "Cannot determine video format: tool missing"):
+                detect_hdr_from_file(Path("unused"))
 
     def test_wayland_hint_keeps_player_option_delimiter(self):
         with patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):

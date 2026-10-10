@@ -60,13 +60,6 @@ async def run_mpv(mpv_args: list[str]) -> int:
         await run_cleanup_step(stop_child, "Stop mpv", timeout=8)
 
 
-def probe_hdr(movie: Path) -> bool:
-    want_hdr, reason = detect_hdr_from_file(movie)
-    if reason.startswith("ffprobe failed:") or reason == "no video stream found":
-        raise RuntimeError(f"Cannot determine video format: {reason}")
-    return want_hdr
-
-
 async def apply_tv_profile(tv: TvController, profile: TvProfile, *, cleanup: bool = False) -> None:
     async with asyncio.timeout(90):
         await tv.apply_profile(profile)
@@ -87,6 +80,8 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
             movie = await asyncio.to_thread(resolve_movie_path, movie)
             if shutil.which("mpv") is None:
                 raise RuntimeError("mpv is not installed or not on PATH.")
+            # Validate media before pairing or touching the display.
+            want_hdr = await asyncio.to_thread(detect_hdr_from_file, movie)
             tv = TvController(require_tv_ip(), DEFAULT_TV_INPUT)
             display = DisplayController(DEFAULT_DISPLAY_OUTPUT)
             display_changed = tv_changed = connected = setup_complete = interrupted = False
@@ -103,7 +98,6 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                 # Settle every read/worker before writes or rollback, including
                 # on cancellation. Independent reads overlap for latency.
                 prepared = await finish_on_cancel(asyncio.gather(
-                    asyncio.to_thread(probe_hdr, movie),
                     asyncio.to_thread(display.capture),
                     connect(),
                     return_exceptions=True,
@@ -113,9 +107,9 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                     raise RuntimeError("Preparation failed: " + "; ".join(errors))
 
                 display_changed = True
-                await finish_on_cancel(asyncio.to_thread(display.apply_movie_state, enable_hdr=prepared[0]))
+                await finish_on_cancel(asyncio.to_thread(display.apply_movie_state, enable_hdr=want_hdr))
                 tv_changed = True
-                await finish_on_cancel(apply_tv_profile(tv, build_movie_profile(want_hdr=prepared[0])))
+                await finish_on_cancel(apply_tv_profile(tv, build_movie_profile(want_hdr=want_hdr)))
                 setup_complete = True
                 log(f"Ready in {time.monotonic() - started:.2f}s; starting mpv.")
                 # Decode pre-target seek frames so skipped Dolby Vision metadata
