@@ -106,6 +106,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.tv.apply_profile.assert_not_awaited()
         self.tv.__aexit__.assert_awaited_once()
         self.player.assert_not_awaited()
+        self.assertFalse(self.tv.return_to_input)
 
     async def test_partial_tv_failure_restores_both_sides(self):
         async def apply(profile):

@@ -142,8 +142,7 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                     except Exception as err:
                         cleanup_failures.append(f"TV restore failed: {err}")
                 try:
-                    if not connected:
-                        tv.return_to_input = False
+                    tv.return_to_input = tv_changed
                     interrupted = await run_cleanup_step(
                         lambda: tv.__aexit__(None, None, None), "TV disconnect", timeout=15,
                     ) or interrupted
