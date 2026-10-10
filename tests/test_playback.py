@@ -72,6 +72,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.tv.__aexit__.assert_awaited_once()
         self.assertIn("--hr-seek-framedrop=no", self.player.await_args.args[0])
         self.assertIn("--wayland-content-type=none", self.player.await_args.args[0])
+        self.assertIn("--hwdec=nvdec", self.player.await_args.args[0])
         self.assertEqual(self.player.await_args.args[0][-2:], ["--", str(self.movie)])
 
     async def test_sdr_uses_sdr_profile(self):

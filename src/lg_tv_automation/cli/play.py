@@ -111,8 +111,10 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                 # Decode pre-target seek frames so skipped Dolby Vision metadata
                 # cannot leave FFmpeg's RPU buffer pending and trigger warnings.
                 # Keep Wayland from classifying movie playback as game content.
+                # Prefer NVIDIA decoding: Vulkan Video stalled during shutdown
+                # on this workstation even after reaching the end of playback.
                 result = await run_mpv([
-                    "--hr-seek-framedrop=no", "--wayland-content-type=none",
+                    "--hr-seek-framedrop=no", "--wayland-content-type=none", "--hwdec=nvdec",
                     *(mpv_options or []), "--", str(movie),
                 ])
             except asyncio.CancelledError:
