@@ -14,7 +14,7 @@ from ..console import log
 from ..constants import DEFAULT_DISPLAY_OUTPUT, DEFAULT_TV_INPUT
 from ..display import DisplayController
 from ..lifecycle import finish_on_cancel, run_cleanup_step
-from ..media import detect_hdr_from_file, normalize_mpv_args, resolve_movie_path
+from ..media import detect_hdr_from_file, resolve_movie_path
 from ..profiles import build_desktop_profile, build_movie_profile
 from ..models import TvProfile
 from ..session import session_lock
@@ -65,7 +65,7 @@ async def apply_tv_profile(tv: TvController, profile: TvProfile, *, cleanup: boo
         await tv.apply_profile(profile)
     # Input classification and live signal are mandatory. Picture/motion API
     # failures remain playback warnings, but cleanup must report every failure.
-    failures = list(tv.failures) if cleanup else tv.critical_failures(tolerate_picture_mode=True)
+    failures = list(tv.failures) if cleanup else tv.critical_failures()
     if failures:
         raise RuntimeError("; ".join(failures))
     if tv.failures:
@@ -80,26 +80,22 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
             movie = await asyncio.to_thread(resolve_movie_path, movie)
             if shutil.which("mpv") is None:
                 raise RuntimeError("mpv is not installed or not on PATH.")
-            # Validate media before pairing or touching the display.
+            # Reject unreadable/non-video files before connecting (and possibly
+            # prompting for pairing) or touching the display at all.
             want_hdr = await asyncio.to_thread(detect_hdr_from_file, movie)
             tv = TvController(require_tv_ip(), DEFAULT_TV_INPUT)
             display = DisplayController(DEFAULT_DISPLAY_OUTPUT)
-            display_changed = tv_changed = connected = setup_complete = interrupted = False
+            display_changed = tv_changed = setup_complete = interrupted = False
             result = 0
             cleanup_failures: list[str] = []
             log("Preparing playback.")
-
-            async def connect() -> None:
-                nonlocal connected
-                await tv.__aenter__()
-                connected = True
 
             try:
                 # Settle every read/worker before writes or rollback, including
                 # on cancellation. Independent reads overlap for latency.
                 prepared = await finish_on_cancel(asyncio.gather(
                     asyncio.to_thread(display.capture),
-                    connect(),
+                    tv.__aenter__(),
                     return_exceptions=True,
                 ))
                 errors = [str(value) for value in prepared if isinstance(value, BaseException)]
@@ -114,9 +110,11 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                 log(f"Ready in {time.monotonic() - started:.2f}s; starting mpv.")
                 # Decode pre-target seek frames so skipped Dolby Vision metadata
                 # cannot leave FFmpeg's RPU buffer pending and trigger warnings.
-                result = await run_mpv(normalize_mpv_args([
-                    "--hr-seek-framedrop=no", *(mpv_options or []), "--", str(movie),
-                ]))
+                # Keep Wayland from classifying movie playback as game content.
+                result = await run_mpv([
+                    "--hr-seek-framedrop=no", "--wayland-content-type=none",
+                    *(mpv_options or []), "--", str(movie),
+                ])
             except asyncio.CancelledError:
                 interrupted = True
                 result = 130
@@ -134,7 +132,7 @@ async def run_playback(movie: Path, *, mpv_options: list[str] | None = None) -> 
                         ) or interrupted
                     except Exception as err:
                         cleanup_failures.append(f"Display restore failed: {err}")
-                if connected and tv_changed:
+                if tv_changed:
                     try:
                         interrupted = await run_cleanup_step(
                             lambda: apply_tv_profile(tv, build_desktop_profile(), cleanup=True), "TV restore",

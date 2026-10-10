@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from lg_tv_automation.cli import play
 from lg_tv_automation.display import DisplayController, load_display_output
-from lg_tv_automation.media import detect_hdr_from_file, probe_media, normalize_mpv_args, resolve_movie_path
+from lg_tv_automation.media import detect_hdr_from_file, probe_media, resolve_movie_path
 from lg_tv_automation.models import DisplaySnapshot
 from lg_tv_automation.process import run_command
 from lg_tv_automation.tv import TvController
@@ -71,6 +71,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.profiles[-1].label, "HDMI 1")
         self.tv.__aexit__.assert_awaited_once()
         self.assertIn("--hr-seek-framedrop=no", self.player.await_args.args[0])
+        self.assertIn("--wayland-content-type=none", self.player.await_args.args[0])
         self.assertEqual(self.player.await_args.args[0][-2:], ["--", str(self.movie)])
 
     async def test_sdr_uses_sdr_profile(self):
@@ -286,10 +287,6 @@ class CoreTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Cannot determine video format: tool missing"):
                 detect_hdr_from_file(Path("unused"))
 
-    def test_wayland_hint_keeps_player_option_delimiter(self):
-        with patch.dict(os.environ, {"XDG_SESSION_TYPE": "wayland"}):
-            self.assertEqual(normalize_mpv_args(["--", "/movie.mkv"]), ["--wayland-content-type=none", "--", "/movie.mkv"])
-
     def test_display_noop_performs_no_writes_or_waits(self):
         output = {"name": "HDMI-A-1", "currentModeId": "14", "hdr": False, "wcg": False}
         display = DisplayController("HDMI-A-1")
@@ -338,7 +335,7 @@ class TvTests(unittest.IsolatedAsyncioTestCase):
         tv.client = SimpleNamespace(request=AsyncMock(side_effect=AssertionError("Unexpected UI request")))
         tv._ensure_input_active = AsyncMock()
         tv._get_input_info = AsyncMock(return_value={"label": "Blu-ray Player", "icon": "bluray.png"})
-        tv._set_picture_mode = AsyncMock()
+        tv._set_picture_mode = AsyncMock(return_value=False)
         tv._get_picture_setting = AsyncMock(return_value="cinemaClear")
         tv._apply_hidden_hdmi_state = AsyncMock()
         tv._ensure_hdmi_signal = AsyncMock(return_value=True)
@@ -346,9 +343,7 @@ class TvTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tv.failures)
         tv.client.request.assert_not_awaited()
         tv._ensure_hdmi_signal.assert_awaited_once()
-        self.assertEqual(tv.verification["tru_motion"], "verified")
-        self.assertEqual(tv.verification["hdmi_signal"], "verified")
-        self.assertIn("unverified", tv.verification["game_optimizer_master"])
+        self.assertEqual(tv._apply_hidden_hdmi_state.await_count, 2)
 
     async def test_short_deadline_bounds_slow_fetch(self):
         tv = TvController("tv", "HDMI_1")

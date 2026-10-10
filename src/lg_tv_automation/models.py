@@ -1,14 +1,6 @@
-"""The three state structures used by playback."""
+"""TV profiles and the display state saved for recovery."""
 
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class HdmiFeatureState:
-    passthrough_444: bool
-    game_optimizer_master: bool
-    vrr: bool
-    allm: bool
 
 
 @dataclass(frozen=True)
@@ -17,7 +9,7 @@ class TvProfile:
     icon: str
     picture_mode: str
     tru_motion: str | None
-    hdmi_features: HdmiFeatureState | None = None
+    desktop_features: bool
 
 
 @dataclass(frozen=True)

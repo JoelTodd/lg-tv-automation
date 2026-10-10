@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +21,6 @@ def resolve_movie_path(path: Path) -> Path:
     if not path.is_file():
         raise RuntimeError(f"Movie file not found: {path}")
     return path
-
-
-def normalize_mpv_args(arguments: list[str]) -> list[str]:
-    """Do not let Wayland classify movie playback as game content."""
-    wayland = os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland"
-    if arguments and wayland and not any(arg.startswith("--wayland-content-type") for arg in arguments):
-        return ["--wayland-content-type=none", *arguments]
-    return arguments[:]
 
 
 def probe_media(path: Path) -> dict[str, Any]:

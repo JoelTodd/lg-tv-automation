@@ -11,10 +11,10 @@ from typing import Any, Awaitable, Callable
 
 from bscpylgtv import WebOsClient
 
-from .console import detail, log
+from .console import log
 from .config import pairing_key_path
 from .constants import expected_input_app_id
-from .models import HdmiFeatureState, TvProfile
+from .models import TvProfile
 
 Fetcher = Callable[[], Awaitable[Any]]
 Predicate = Callable[[Any], bool]
@@ -36,7 +36,6 @@ class TvController:
         self.client: WebOsClient | None = None
         self.failures: list[str] = []
         self.return_to_input = True
-        self.verification: dict[str, str] = {}
 
     async def __aenter__(self) -> "TvController":
         try:
@@ -196,7 +195,7 @@ class TvController:
                 "active HDMI input", timeout=4.0, interval=0.1,
             )
 
-    async def _ensure_hdmi_signal(self) -> bool | None:
+    async def _ensure_hdmi_signal(self) -> None:
         """Require the TV to see HDMI pixels after a profile transition.
 
         A Fedora 44 / NVIDIA transition can leave KScreen reporting an enabled
@@ -209,7 +208,7 @@ class TvController:
         if "hdmiSignalExist" not in input_info:
             return
         if input_info["hdmiSignalExist"]:
-            return True
+            return
 
         await self._wait_for_value(
             self._get_input_info,
@@ -218,75 +217,34 @@ class TvController:
             timeout=TV_HDMI_SIGNAL_TIMEOUT,
             interval=0.5,
         )
-        return True
 
-    async def _set_hidden_other_settings(self, settings: dict[str, Any], description: str) -> None:
-        detail(f"Setting {description}.")
+    async def _set_hidden_other_settings(self, settings: dict[str, Any]) -> None:
         await self._alert_luna(
             "luna://com.webos.settingsservice/setSystemSettings",
             {"category": "other", "settings": settings},
         )
 
-    async def _apply_hidden_hdmi_state(self, state: HdmiFeatureState) -> None:
-        """Apply HDMI/Game Optimizer flags through hidden setting keys.
+    async def _apply_hidden_hdmi_state(self, enabled: bool) -> None:
+        """Switch the desktop HDMI features together, preserving write order.
 
-        The ordering matters. When disabling movie-hostile features we keep Game
-        Optimizer enabled long enough for VRR and ALLM writes to succeed, then
-        switch it off last. The reverse is used when enabling desktop mode.
+        Enable Game Optimizer before VRR/ALLM for desktop mode; disable it
+        after VRR/ALLM for movies. Both profiles write 4:4:4 bypass last.
         """
-
         port = self._input_port_number()
-
-        def on_off(value: bool) -> str:
-            return "on" if value else "off"
-
-        input_optimization = "on" if state.allm else "off"
-        quick_game = on_off(state.allm)
-
-        if state.game_optimizer_master:
-            await self._set_hidden_other_settings(
-                {"gameMode": {f"hdmi{port}": "on"}},
-                f"Game Optimizer master for HDMI {port} to on",
-            )
-            await self._set_hidden_other_settings(
-                {
-                    "gameOptimization": on_off(state.vrr),
-                    f"gameOptimizationHDMI{port}": on_off(state.vrr),
-                },
-                f"VRR & G-Sync to {on_off(state.vrr)}",
-            )
-            await self._set_hidden_other_settings(
-                {
-                    "enableALLM": on_off(state.allm),
-                    "inputOptimization": input_optimization,
-                    "enableQuickGame": quick_game,
-                },
-                f"ALLM to {on_off(state.allm)}",
-            )
-        else:
-            await self._set_hidden_other_settings(
-                {
-                    "gameOptimization": on_off(state.vrr),
-                    f"gameOptimizationHDMI{port}": on_off(state.vrr),
-                },
-                f"VRR & G-Sync to {on_off(state.vrr)}",
-            )
-            await self._set_hidden_other_settings(
-                {
-                    "enableALLM": on_off(state.allm),
-                    "inputOptimization": input_optimization,
-                    "enableQuickGame": quick_game,
-                },
-                f"ALLM to {on_off(state.allm)}",
-            )
-            await self._set_hidden_other_settings(
-                {"gameMode": {f"hdmi{port}": "off"}},
-                f"Game Optimizer master for HDMI {port} to off",
-            )
-
+        value = "on" if enabled else "off"
+        master = {"gameMode": {f"hdmi{port}": value}}
+        if enabled:
+            await self._set_hidden_other_settings(master)
         await self._set_hidden_other_settings(
-            {f"444BypassHDMI{port}": on_off(state.passthrough_444)},
-            f"4:4:4 Pass Through for HDMI {port} to {on_off(state.passthrough_444)}",
+            {"gameOptimization": value, f"gameOptimizationHDMI{port}": value},
+        )
+        await self._set_hidden_other_settings(
+            {"enableALLM": value, "inputOptimization": value, "enableQuickGame": value},
+        )
+        if not enabled:
+            await self._set_hidden_other_settings(master)
+        await self._set_hidden_other_settings(
+            {f"444BypassHDMI{port}": value},
         )
         await asyncio.sleep(1.0)
 
@@ -313,25 +271,18 @@ class TvController:
             pass
         raise RuntimeError(f"{description} verification failed; last value was {last_value!r}")
 
-    def critical_failures(self, *, tolerate_picture_mode: bool = False) -> list[str]:
-        """Return the subset of apply failures that should abort playback."""
-
-        return [
-            failure
-            for failure in self.failures
-            if not failure.startswith("TV truMotion change failed:")
-            and (not tolerate_picture_mode or not failure.startswith("TV picture mode change failed:"))
-        ]
+    def critical_failures(self) -> list[str]:
+        """Input and signal failures abort playback; picture failures warn."""
+        return [failure for failure in self.failures if not failure.startswith((
+            "TV truMotion change failed:", "TV picture mode change failed:",
+        ))]
 
     async def _set_picture_mode(self, picture_mode: str) -> None:
         """Apply a picture mode with bounded fallbacks across direct API paths."""
 
         assert self.client is not None
         current_picture_mode = await self._get_picture_mode()
-        if current_picture_mode != picture_mode:
-            detail(f"Setting current picture mode to {picture_mode}.")
-        else:
-            detail(f"Picture mode already at {picture_mode}.")
+        if current_picture_mode == picture_mode:
             return
 
         async def write_system_mode() -> None:
@@ -393,7 +344,6 @@ class TvController:
         """Apply a TV profile and verify each direct setting that can be verified."""
 
         self.failures.clear()
-        self.verification.clear()
 
         assert self.client is not None
 
@@ -403,7 +353,6 @@ class TvController:
         current_icon = Path(input_info["icon"]).stem
         if input_info["label"] != profile.label or current_icon != profile.icon:
             try:
-                detail(f"Setting {self.input_id} label/icon to {profile.label}/{profile.icon}.")
                 await self._request_with_timeout(
                     self.client.set_device_info(self.input_id, profile.icon, profile.label),
                     f"set {self.input_id} label/icon to {profile.label}/{profile.icon}",
@@ -417,24 +366,20 @@ class TvController:
                 message = f"TV relabel failed: {err}"
                 self.failures.append(message)
                 log(message)
-        else:
-            detail(f"{self.input_id} label/icon already at {profile.label}/{profile.icon}.")
 
         hdmi_features_applied = False
-        if profile.hdmi_features is not None:
-            try:
-                await self._apply_hidden_hdmi_state(profile.hdmi_features)
-                hdmi_features_applied = True
-            except Exception as err:
-                message = f"Direct HDMI/Game Optimizer state change failed: {err}"
-                self.failures.append(message)
-                log(message)
+        try:
+            await self._apply_hidden_hdmi_state(profile.desktop_features)
+            hdmi_features_applied = True
+        except Exception as err:
+            message = f"Direct HDMI/Game Optimizer state change failed: {err}"
+            self.failures.append(message)
+            log(message)
 
-            await self._ensure_input_active()
+        await self._ensure_input_active()
 
         try:
             await self._set_picture_mode(profile.picture_mode)
-            self.verification["picture_mode"] = "verified"
         except Exception as err:
             message = f"TV picture mode change failed: {err}"
             self.failures.append(message)
@@ -445,7 +390,6 @@ class TvController:
             try:
                 current_motion = await self._get_picture_setting("truMotionMode")
                 if current_motion != target_motion:
-                    detail(f"Setting TruMotion to {target_motion}.")
                     async def current_app_write() -> None:
                         await self._request_with_timeout(
                             self.client.set_settings("picture", {"truMotionMode": target_motion}, current_app=True),
@@ -471,30 +415,22 @@ class TvController:
                         except Exception:
                             if index == 1:
                                 raise
-                            detail("Current-app TruMotion write did not verify; retrying mode-specific write.")
-                self.verification["tru_motion"] = "verified"
             except Exception as err:
                 message = f"TV truMotion change failed: {err}"
                 self.failures.append(message)
                 log(message)
 
-        if profile.hdmi_features is not None and hdmi_features_applied:
+        if hdmi_features_applied:
             try:
-                detail("Reapplying HDMI/Game Optimizer state after picture-mode writes.")
-                await self._apply_hidden_hdmi_state(profile.hdmi_features)
-                self.verification["hidden_hdmi_features"] = "write acknowledged; visible state unverified"
+                await self._apply_hidden_hdmi_state(profile.desktop_features)
             except Exception as err:
                 message = f"Final HDMI/Game Optimizer state change failed: {err}"
                 self.failures.append(message)
                 log(message)
 
-            self.verification["game_optimizer_master"] = "visible state unverified; inspect with Codex"
-
         try:
-            detail(f"Verifying {self.input_id} has a live HDMI signal.")
             await self._ensure_input_active()
-            signal = await self._ensure_hdmi_signal()
-            self.verification["hdmi_signal"] = "verified" if signal else "unavailable"
+            await self._ensure_hdmi_signal()
         except Exception as err:
             message = f"TV HDMI signal verification failed: {err}"
             self.failures.append(message)

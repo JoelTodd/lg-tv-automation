@@ -16,8 +16,7 @@ from unittest.mock import AsyncMock, patch
 from lg_tv_automation.config import require_tv_ip, tv_ip_config_path
 from lg_tv_automation.constants import DEFAULT_MOVIE_ICON, DEFAULT_MOVIE_LABEL, DEFAULT_TRUMOTION, expected_input_app_id
 from lg_tv_automation.display import DisplayController
-from lg_tv_automation.media import normalize_mpv_args
-from lg_tv_automation.models import DisplaySnapshot, HdmiFeatureState, TvProfile
+from lg_tv_automation.models import DisplaySnapshot, TvProfile
 from lg_tv_automation.profiles import build_movie_profile
 from lg_tv_automation.tv import TvController
 from lg_tv_automation.lifecycle import run_cleanup_step
@@ -78,28 +77,6 @@ class HelperTests(unittest.TestCase):
     def test_default_movie_input_profile_forces_non_pc_classification(self) -> None:
         self.assertEqual(DEFAULT_MOVIE_LABEL, "Blu-ray Player")
         self.assertEqual(DEFAULT_MOVIE_ICON, "bluray")
-
-    def test_normalize_mpv_args_injects_wayland_content_type_none_by_default(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {"WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "wayland"},
-            clear=False,
-        ):
-            self.assertEqual(
-                normalize_mpv_args(["movie.mkv"]),
-                ["--wayland-content-type=none", "movie.mkv"],
-            )
-
-    def test_normalize_mpv_args_preserves_explicit_wayland_content_type_override(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {"WAYLAND_DISPLAY": "wayland-0", "XDG_SESSION_TYPE": "wayland"},
-            clear=False,
-        ):
-            self.assertEqual(
-                normalize_mpv_args(["--wayland-content-type=video", "movie.mkv"]),
-                ["--wayland-content-type=video", "movie.mkv"],
-            )
 
     def test_apply_movie_state_forces_vrr_policy_never(self) -> None:
         controller = DisplayController("HDMI-A-1")
@@ -281,7 +258,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         )
         controller._ensure_input_active = AsyncMock()
         controller._get_input_info = AsyncMock(return_value={"label": "HDMI 1", "icon": "HDMI_1.png"})
-        controller._get_picture_mode = AsyncMock(side_effect=["hdrFilmMaker", "hdrFilmMaker"])
+        controller._get_picture_mode = AsyncMock(return_value="hdrFilmMaker")
         controller._get_picture_setting = AsyncMock(return_value="off")
         controller._apply_hidden_hdmi_state = AsyncMock()
 
@@ -297,12 +274,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             icon="HDMI_1",
             picture_mode="hdrFilmMaker",
             tru_motion="cinemaClear",
-            hdmi_features=HdmiFeatureState(
-                passthrough_444=False,
-                game_optimizer_master=False,
-                vrr=False,
-                allm=False,
-            ),
+            desktop_features=False,
         )
 
         with (
@@ -321,7 +293,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
         )
         events: list[str] = []
 
-        async def apply_hidden_state(_state: HdmiFeatureState) -> None:
+        async def apply_hidden_state(_state: bool) -> None:
             events.append("hdmi")
 
         async def set_picture_mode(_picture_mode: str) -> None:
@@ -344,12 +316,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
             icon="HDMI_1",
             picture_mode="hdrFilmMaker",
             tru_motion="on",
-            hdmi_features=HdmiFeatureState(
-                passthrough_444=False,
-                game_optimizer_master=False,
-                vrr=False,
-                allm=False,
-            ),
+            desktop_features=False,
         )
 
         with (
@@ -383,12 +350,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()):
             await controller._apply_hidden_hdmi_state(
-                HdmiFeatureState(
-                    passthrough_444=False,
-                    game_optimizer_master=False,
-                    vrr=False,
-                    allm=False,
-                )
+                False
             )
 
         calls = controller._set_hidden_other_settings.await_args_list
@@ -409,12 +371,7 @@ class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("lg_tv_automation.tv.asyncio.sleep", new=AsyncMock()):
             await controller._apply_hidden_hdmi_state(
-                HdmiFeatureState(
-                    passthrough_444=True,
-                    game_optimizer_master=True,
-                    vrr=True,
-                    allm=True,
-                )
+                True
             )
 
         calls = controller._set_hidden_other_settings.await_args_list
