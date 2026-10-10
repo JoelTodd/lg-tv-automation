@@ -213,6 +213,17 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoreTests(unittest.TestCase):
+    def test_inactive_output_is_rejected_before_display_writes(self):
+        for state in ({"connected": False}, {"enabled": False}, {"currentModeId": None}):
+            with self.subTest(state=state):
+                display = DisplayController("HDMI-A-1")
+                output = {"currentModeId": "14", "hdr": False, "wcg": False, **state}
+                with patch("lg_tv_automation.display.load_display_output", return_value=output), patch("lg_tv_automation.display.run_command") as command:
+                    with self.assertRaises(RuntimeError):
+                        display.capture()
+                command.assert_not_called()
+                self.assertIsNone(display.saved_state)
+
     def test_media_probe_excludes_attached_cover_art(self):
         with patch("lg_tv_automation.media.run_command", return_value=SimpleNamespace(stdout='{"streams": []}')) as command:
             with self.assertRaisesRegex(RuntimeError, "no video stream found"):
@@ -303,8 +314,9 @@ class CoreTests(unittest.TestCase):
 
     def test_corrupt_display_json_is_retried(self):
         output = {"name": "HDMI-A-1"}
-        with patch("lg_tv_automation.display.run_command", side_effect=[SimpleNamespace(stdout="bad"), SimpleNamespace(stdout=json.dumps({"outputs": [output]}))]):
-            self.assertEqual(load_display_output("HDMI-A-1", interval=0), output)
+        for invalid in ("bad", "null", "[]", '{"outputs": null}', '{"outputs": [null]}'):
+            with self.subTest(invalid=invalid), patch("lg_tv_automation.display.run_command", side_effect=[SimpleNamespace(stdout=invalid), SimpleNamespace(stdout=json.dumps({"outputs": [output]}))]):
+                self.assertEqual(load_display_output("HDMI-A-1", interval=0), output)
 
     def test_subprocess_timeout_is_actionable(self):
         import subprocess

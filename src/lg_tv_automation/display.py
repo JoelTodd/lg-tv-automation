@@ -25,7 +25,7 @@ def load_display_output(name: str, retries: int = 20, interval: float = .25, *, 
             for output in data["outputs"]:
                 if output["name"] == name:
                     return output
-        except (RuntimeError, ValueError, KeyError) as err:
+        except (RuntimeError, ValueError, KeyError, TypeError) as err:
             last_error = err
         if attempt < retries - 1:
             time.sleep(max(0, min(interval, deadline - time.monotonic())))
@@ -40,6 +40,10 @@ class DisplayController:
 
     def capture(self) -> DisplaySnapshot:
         output = load_display_output(self.output_name)
+        if not output.get("connected", True) or not output.get("enabled", True):
+            raise RuntimeError(f"Display output {self.output_name!r} is disconnected or disabled.")
+        if output.get("currentModeId") is None:
+            raise RuntimeError(f"Display output {self.output_name!r} has no active mode.")
         self._captured_output = output
         self.saved_state = DisplaySnapshot(
             mode_id=str(output["currentModeId"]), hdr=bool(output["hdr"]),
