@@ -264,6 +264,7 @@ class CoreTests(unittest.TestCase):
             ({"side_data_list": [{"side_data_type": "Mastering display metadata"}]}, True),
             ({"color_primaries": "bt2020", "pix_fmt": "yuv420p10le"}, True),
             ({"color_transfer": "bt709", "pix_fmt": "yuv420p"}, False),
+            ({"color_transfer": "bt709", "color_primaries": "bt2020", "pix_fmt": "yuv420p10le"}, False),
         ]:
             with self.subTest(stream=stream):
                 self.assertEqual(detect_hdr_from_file(Path("unused"), stream=stream), hdr)

@@ -59,6 +59,8 @@ def detect_hdr_from_file(path: Path, *, stream: dict[str, Any] | None = None) ->
     side_types = {str(item.get("side_data_type", "")).lower() for item in stream.get("side_data_list") or []}
     if transfer in {"smpte2084", "arib-std-b67"}:
         return True
+    if transfer and transfer not in {"unknown", "unspecified"}:
+        return False
     if {"mastering display metadata", "content light level metadata"} & side_types:
         return True
     if primaries == "bt2020" and any(token in pix_fmt for token in ("10", "12", "16")):
