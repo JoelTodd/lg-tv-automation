@@ -327,6 +327,12 @@ class CoreTests(unittest.TestCase):
 
 
 class TvTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_alert_id_is_not_a_successful_setting_write(self):
+        tv = TvController("tv", "HDMI_1")
+        tv.client = SimpleNamespace(request=AsyncMock(return_value={"returnValue": True}))
+        with self.assertRaisesRegex(RuntimeError, "no alertId"):
+            await tv._alert_luna("luna://test", {})
+
     async def test_profile_is_api_only_and_checks_live_signal(self):
         tv = TvController("tv", "HDMI_1")
         tv.client = SimpleNamespace(request=AsyncMock(side_effect=AssertionError("Unexpected UI request")))

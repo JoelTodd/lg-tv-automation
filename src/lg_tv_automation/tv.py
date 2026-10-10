@@ -170,14 +170,15 @@ class TvController:
             raise RuntimeError(f"createAlert failed for {uri}: {result}")
 
         alert_id = result.get("alertId")
-        if alert_id:
-            close = await self._request_with_timeout(
-                self.client.request("system.notifications/closeAlert", {"alertId": alert_id}),
-                f"close hidden settings alert for {uri}",
-                timeout=TV_HIDDEN_SETTINGS_TIMEOUT,
-            )
-            if not close.get("returnValue"):
-                raise RuntimeError(f"closeAlert failed for {uri}: {close}")
+        if not alert_id:
+            raise RuntimeError(f"createAlert returned no alertId for {uri}; hidden setting was not applied.")
+        close = await self._request_with_timeout(
+            self.client.request("system.notifications/closeAlert", {"alertId": alert_id}),
+            f"close hidden settings alert for {uri}",
+            timeout=TV_HIDDEN_SETTINGS_TIMEOUT,
+        )
+        if not close.get("returnValue"):
+            raise RuntimeError(f"closeAlert failed for {uri}: {close}")
 
     async def _ensure_input_active(self) -> None:
         """Return to the Fedora HDMI app if a previous step opened another app."""
