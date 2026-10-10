@@ -31,6 +31,10 @@ class RecoveryTests(unittest.TestCase):
                 with patch("lg_tv_automation.config.sqlite3.connect", side_effect=track):
                     target = pairing_key_path()
                     self.assertEqual(pairing_key_path(), target)
+            self.assertEqual(len(connections), 2)
+            for connection in connections:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
             self.assertEqual(legacy.read_bytes(), original)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             with closing(sqlite3.connect(target)) as db:

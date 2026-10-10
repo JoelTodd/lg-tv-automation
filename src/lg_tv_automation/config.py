@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 TV_IP_ENV_VAR = "LG_TV_IP"
@@ -26,8 +27,8 @@ def pairing_key_path() -> Path:
         for source in (checkout / ".aiopylgtv.sqlite", Path.home() / ".aiopylgtv.sqlite"):
             if source.is_file():
                 try:
-                    with sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True) as old_db:
-                        with sqlite3.connect(target) as new_db:
+                    with closing(sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)) as old_db:
+                        with closing(sqlite3.connect(target)) as new_db:
                             old_db.backup(new_db)
                 except BaseException:
                     target.unlink(missing_ok=True)
