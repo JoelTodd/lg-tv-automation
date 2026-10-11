@@ -41,6 +41,57 @@ def make_ui():
 
 
 class RenderTests(unittest.TestCase):
+    def test_metadata_fallback_warnings_clear_after_playback_advances(self):
+        ui = make_ui()
+        ui.phase, ui.telemetry = "Playback", "Live"
+        warnings = (
+            "[ffmpeg/demuxer] mov,mp4,m4a,3gp,3g2,mj2: UDTA parsing failed retrying raw",
+            "[ffmpeg/demuxer] mov,mp4,m4a,3gp,3g2,mj2: stream 0, timescale not set",
+        )
+        for message in warnings:
+            ui.notice(message)
+            ui.notice(message)
+        self.assertIsNone(ui.latest_error)
+        self.assertIn("UDTA", "\n".join(ui.alert_lines(time.monotonic(), 75)))
+        ui.property_change({"name": "pause", "data": False})
+        ui.property_change({"name": "time-pos", "data": 0})
+        self.assertIn("UDTA", "\n".join(ui.alert_lines(time.monotonic(), 75)))
+        ui.property_change({"name": "time-pos", "data": .5})
+        self.assertEqual(ui.alert_lines(time.monotonic(), 75), [])
+        ui.values.clear()  # Observer disconnects before the exit report.
+        ui.result = ui.player_exit = 0
+        self.assertNotIn("DIAGNOSTICS", "\n".join(ui.summary(time.monotonic())))
+        # Retain the original context when the session ultimately fails.
+        ui.result = 1
+        self.assertIn("UDTA", "\n".join(ui.summary(time.monotonic())))
+
+    def test_metadata_warnings_do_not_clear_for_pause_seek_or_buffering(self):
+        for condition in ("pause", "seeking", "paused-for-cache"):
+            with self.subTest(condition=condition):
+                ui = make_ui()
+                ui.phase, ui.telemetry = "Playback", "Live"
+                ui.notice("[ffmpeg/demuxer] mov: UDTA parsing failed retrying raw")
+                ui.values = {"pause": False, condition: True}
+                for position in (0, 10):
+                    ui.property_change({"name": "time-pos", "data": position})
+                self.assertIn("UDTA", "\n".join(ui.alert_lines(time.monotonic(), 75)))
+                ui.result = 0
+                self.assertIn("UDTA", "\n".join(ui.summary(time.monotonic())))
+
+    def test_advancing_playback_does_not_hide_real_failures(self):
+        ui = make_ui()
+        ui.phase, ui.telemetry = "Playback", "Live"
+        ui.notice("Audio output failed: device disconnected")
+        ui.notice("[ffmpeg/demuxer] mov: error reading packet")
+        ui.notice("Display restore failed")
+        ui.property_change({"name": "pause", "data": False})
+        for position in (0, 1):
+            ui.property_change({"name": "time-pos", "data": position})
+        ui.result = 0
+        for message in ("Audio output failed", "error reading packet", "Display restore failed"):
+            self.assertIn(message, "\n".join(ui.alert_lines(time.monotonic(), 75)))
+            self.assertIn(message, "\n".join(ui.summary(time.monotonic())))
+
     def test_full_terminal_layout_and_effects_preserve_measurements(self):
         ui = make_ui()
         ui.phase, ui.telemetry = "Playback", "Live"

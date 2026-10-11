@@ -45,6 +45,8 @@ A single alert line surfaces errors or abnormal playback conditions; full
 details go to the exit log. Routine A/V values, zero-drop counters, fixed profile
 settings, and successful checks are omitted from the dashboard. mpv's terminal
 shortcuts remain available. Telemetry doesn't poll the TV or display.
+Recoverable MP4 metadata warnings clear once playback advances and are omitted
+from successful exit reports. Playback and restoration failures remain visible.
 
 After exit, a spaced session report remains in terminal scrollback, grouped into
 timing, media, and diagnostics. It records the result, last position, aggregate

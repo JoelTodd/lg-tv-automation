@@ -30,6 +30,7 @@ class Diagnostic:
     level: str
     message: str
     repeats: int = 1
+    recoverable_metadata: bool = False
 
 
 def numeric(value: object) -> float | None:
@@ -73,6 +74,7 @@ class PlaybackUI:
         self.result: int | None = None
         self.player_exit: int | None = None
         self.end_reason: str | None = None
+        self._playback_confirmed = False
         self._task: asyncio.Task | None = None
         self._token = None
         self._terminal_state = None
@@ -94,10 +96,17 @@ class PlaybackUI:
         if self.events and self.events[-1].message == message:
             self.events[-1].repeats += 1
             return
-        level = "ERROR" if any(word in message.lower() for word in ("failed", "error", "fatal", "exited with status")) else "WARN"
+        # These container warnings use fallback parsing; advancing playback
+        # confirms recovery. Never infer recovery for audio/decoder failures
+        # just because the player continues running.
+        recoverable_metadata = message.startswith("[ffmpeg/demuxer]") and message.endswith((
+            "UDTA parsing failed retrying raw", "stream 0, timescale not set",
+        ))
+        level = "ERROR" if not recoverable_metadata and any(word in message.lower() for word in ("failed", "error", "fatal", "exited with status")) else "WARN"
         if len(self.events) == self.events.maxlen:
             self.omitted_events += 1
-        event = Diagnostic(time.monotonic() - self.started, level, message)
+        event = Diagnostic(time.monotonic() - self.started, level, message,
+                           recoverable_metadata=recoverable_metadata)
         self.events.append(event)
         if level == "ERROR":
             self.latest_error = event
@@ -107,6 +116,10 @@ class PlaybackUI:
         if name not in PROPERTIES:
             return
         value = event.get("data")
+        if name == "time-pos" and self.phase == "Playback" and self.state() == "Playing":
+            previous, position = self.number("time-pos"), numeric(value)
+            if previous is not None and position is not None and position > previous:
+                self._playback_confirmed = True
         if name in ("pause", "seeking", "paused-for-cache") and value != self.values.get(name):
             self.changed_at = time.monotonic()
         self.values[name] = value
@@ -213,7 +226,9 @@ class PlaybackUI:
         # Pin the latest error, then live conditions, before older diagnostics.
         lines = event_lines(self.latest_error) if self.latest_error is not None else []
         lines.extend(line for alert in alerts for line in wrap(alert, width))
-        for event in reversed(list(self.events)[-4:]):
+        events = [event for event in self.events
+                  if not (event.recoverable_metadata and self._playback_confirmed)]
+        for event in reversed(events[-4:]):
             if event is not self.latest_error:
                 lines.extend(event_lines(event))
         return lines
@@ -287,7 +302,8 @@ class PlaybackUI:
                 for label, name in zip(("render drops", "decoder drops", "mistimed"), COUNTERS)))
         if self.peak_av is not None and self.peak_av > .08:
             diagnostics.append(f"Peak |A/V offset|: {self.peak_av * 1000:.1f} ms")
-        events = list(self.events)
+        events = [event for event in self.events
+                  if not (event.recoverable_metadata and self._playback_confirmed and result == 0)]
         if self.latest_error is not None and self.latest_error not in events:
             events.insert(0, self.latest_error)
         if diagnostics or events or self.omitted_events:
