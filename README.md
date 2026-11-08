@@ -70,7 +70,9 @@ Ctrl-C and SIGTERM stop/reap mpv before bounded restoration and disconnect.
 Partial preparation failures roll back the display. Cleanup returns to HDMI 1
 after TV preparation has started; earlier failures leave the TV input untouched.
 Concurrent playback or Codex maintenance sessions are refused. A hard kill or
-lost TV connection cannot guarantee restoration.
+unreachable TV cannot guarantee restoration. Before restoring TV settings, the
+player opens a fresh control connection with an eight-second deadline, so a
+connection dropped during long playback does not prevent desktop restoration.
 
 ## Setup
 

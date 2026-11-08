@@ -52,6 +52,22 @@ class TvController:
             ) from err
         return self
 
+    async def reconnect(self) -> None:
+        """Replace the potentially stale playback connection before restoration.
+
+        Playback can last hours. Even a client that still reports connected
+        can have a dead socket, so establish a fresh session before any restore
+        writes rather than retrying commands whose effects may be unknown.
+        """
+        assert self.client is not None
+        try:
+            async with asyncio.timeout(TV_CONNECT_TIMEOUT):
+                with redirect_stdout(sys.stderr):
+                    await self.client.disconnect()
+                    await self.client.connect()
+        except TimeoutError as err:
+            raise RuntimeError("TV reconnection timed out before desktop restoration.") from err
+
     async def __aexit__(self, _exc_type, _exc, _tb) -> None:
         """Disconnect cleanly and always land back on HDMI 1.
 

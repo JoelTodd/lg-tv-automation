@@ -31,6 +31,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.tv = TvController("tv", "HDMI_1")
         self.tv.__aenter__ = AsyncMock(return_value=self.tv)
         self.tv.__aexit__ = AsyncMock()
+        self.tv.reconnect = AsyncMock()
         self.profiles = []
         async def apply(profile):
             self.profiles.append(profile)
@@ -61,6 +62,7 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.profiles[0].label, "Blu-ray Player")
         self.assertEqual(self.profiles[-1].label, "HDMI 1")
         self.tv.__aexit__.assert_awaited_once()
+        self.tv.reconnect.assert_awaited_once()
         self.assertIn("--hr-seek-framedrop=no", self.player.await_args.args[0])
         self.assertIn("--wayland-content-type=none", self.player.await_args.args[0])
         self.assertIn("--hwdec=nvdec", self.player.await_args.args[0])
@@ -143,6 +145,46 @@ class PlaybackTests(unittest.IsolatedAsyncioTestCase):
             self.tv.failures = ["TV picture mode change failed: restore refused"] if len(self.profiles) == 2 else []
         self.tv.apply_profile.side_effect = apply
         self.assertEqual(await play.run_playback(self.movie), 1)
+        self.tv.__aexit__.assert_awaited_once()
+
+    async def test_dropped_playback_connection_is_reopened_before_restore(self):
+        connected = True
+        async def disconnect():
+            nonlocal connected
+            connected = False
+        async def connect():
+            nonlocal connected
+            connected = True
+        async def player(*_, **__):
+            nonlocal connected
+            connected = False
+            return 0
+        async def apply(profile):
+            if not connected:
+                raise RuntimeError("Not connected, can't execute command.")
+            self.profiles.append(profile)
+        self.tv.client = SimpleNamespace(
+            disconnect=AsyncMock(side_effect=disconnect),
+            connect=AsyncMock(side_effect=connect),
+            get_current_app=AsyncMock(return_value=self.tv.input_app_id),
+        )
+        self.tv.reconnect = TvController.reconnect.__get__(self.tv)
+        self.tv.__aexit__.side_effect = TvController.__aexit__.__get__(self.tv)
+        self.tv.apply_profile.side_effect = apply
+        self.player.side_effect = player
+        self.assertEqual(await play.run_playback(self.movie), 0)
+        self.assertEqual([p.picture_mode for p in self.profiles], ["hdrFilmMaker", "expert1"])
+        self.tv.client.connect.assert_awaited_once()
+        self.assertEqual(self.tv.client.disconnect.await_count, 2)
+        self.display.apply_desktop_state.assert_called_once()
+
+    async def test_failed_tv_reconnection_reports_failure_and_still_disconnects(self):
+        self.tv.reconnect.side_effect = RuntimeError("TV unreachable")
+        with patch.object(play, "log") as log:
+            self.assertEqual(await play.run_playback(self.movie), 1)
+        self.assertEqual(len(self.profiles), 1)
+        self.assertTrue(any("TV restore failed: TV unreachable" in call.args[0] for call in log.call_args_list))
+        self.display.apply_desktop_state.assert_called_once()
         self.tv.__aexit__.assert_awaited_once()
 
     async def test_player_exit_status_survives_cleanup(self):
@@ -395,7 +437,10 @@ class TvTests(unittest.IsolatedAsyncioTestCase):
                         raise RuntimeError(f"{description} verification failed: {value}")
                     return value
 
-                tv.client = SimpleNamespace(set_settings=AsyncMock(side_effect=write_mode))
+                tv.client = SimpleNamespace(
+                    set_settings=AsyncMock(side_effect=write_mode),
+                    disconnect=AsyncMock(), connect=AsyncMock(),
+                )
                 tv._ensure_input_active = AsyncMock()
                 tv._get_input_info = AsyncMock(return_value={"label": "HDMI 1", "icon": "HDMI_1.png"})
                 tv._get_picture_mode = AsyncMock(side_effect=read_mode)

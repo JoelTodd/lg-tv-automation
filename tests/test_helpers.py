@@ -198,6 +198,39 @@ class HelperTests(unittest.TestCase):
 
 
 class AsyncHelperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reconnection_replaces_even_an_apparently_live_session(self):
+        controller = TvController("203.0.113.10", "HDMI_1")
+        calls = []
+        async def disconnect():
+            calls.append("disconnect")
+        async def connect():
+            calls.append("connect")
+            print("Connection attempt: 2")
+        controller.client = SimpleNamespace(
+            disconnect=AsyncMock(side_effect=disconnect),
+            connect=AsyncMock(side_effect=connect),
+        )
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            await controller.reconnect()
+        self.assertEqual(calls, ["disconnect", "connect"])
+        self.assertEqual(output.getvalue(), "")
+        self.assertIn("Connection attempt: 2", errors.getvalue())
+
+    async def test_reconnection_deadline_bounds_disconnect_and_connect(self):
+        for stalled_step in ("disconnect", "connect"):
+            with self.subTest(stalled_step=stalled_step):
+                controller = TvController("203.0.113.10", "HDMI_1")
+                async def stall():
+                    await asyncio.Future()
+                controller.client = SimpleNamespace(disconnect=AsyncMock(), connect=AsyncMock())
+                getattr(controller.client, stalled_step).side_effect = stall
+                with patch("lg_tv_automation.tv.TV_CONNECT_TIMEOUT", .01):
+                    with self.assertRaisesRegex(RuntimeError, "reconnection timed out"):
+                        await asyncio.wait_for(controller.reconnect(), timeout=1)
+                if stalled_step == "disconnect":
+                    controller.client.connect.assert_not_awaited()
+
     async def test_library_retry_diagnostics_do_not_pollute_json_stdout(self):
         controller = TvController("203.0.113.10", "HDMI_1")
         async def noisy_operation():

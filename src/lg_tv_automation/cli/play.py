@@ -114,6 +114,8 @@ async def _run_mpv(mpv_args: list[str], *, ui: PlaybackUI | None = None, socket:
 
 async def apply_tv_profile(tv: TvController, profile: TvProfile, *, cleanup: bool = False) -> None:
     async with asyncio.timeout(90):
+        if cleanup:
+            await tv.reconnect()
         await tv.apply_profile(profile)
     # Input classification, live signal and final profile verification are
     # mandatory. Earlier picture/motion API failures remain warnings, but
